@@ -11,7 +11,7 @@ import hashlib
 import json
 import re
 
-from homestead_storage_journal import Held, identity, target
+from homestead_storage_journal import RETRIES, Held, identity, target
 
 
 PHASES = ("prepare", "quiesce", "copy", "verify", "switch", "start", "done")
@@ -59,6 +59,18 @@ def _hash(value):
         raise Held("The data handoff receipt fingerprint is invalid")
 
 
+def _status_retry(old, new):
+    """The one rewrite an open intent allows (#826): its request was refused
+    with a 409 that a status write alone caused, and it goes out again against
+    the same object's new version. Nothing else about the request may change."""
+    rest = lambda entry: {k: v for k, v in entry.items() if k not in ("before", "retries", "reviewed")}
+    before, after = old["before"], new["before"]
+    return (old["method"] in ("PUT", "PATCH") and rest(old) == rest(new)
+            and new.get("retries") == old.get("retries", []) + [{"resourceVersion": before["resourceVersion"], "code": 409}]
+            and after["uid"] == before["uid"] and after["resourceVersion"] != before["resourceVersion"]
+            and new.get("reviewed") == old.get("reviewed", before))
+
+
 def _journal(job, operation, namespace):
     _keys(job, ("id", "ref"))
     _keys(job["ref"], ("namespace", "storage_writes"), ("retain_resources",))
@@ -71,7 +83,7 @@ def _journal(job, operation, namespace):
         raise Held("The data handoff journal is invalid or full")
     steps = set()
     for entry in entries:
-        _keys(entry, ("step", "method", "target", "payload", "before", "state"), ("after", "shape"))
+        _keys(entry, ("step", "method", "target", "payload", "before", "state"), ("after", "shape", "reviewed", "retries"))
         step = entry["step"]
         if not isinstance(step, str) or not re.fullmatch(r"[a-zA-Z0-9_.:/-]{1,500}", step) or step in steps:
             raise Held("The data handoff journal step is invalid or repeated")
@@ -94,6 +106,22 @@ def _journal(job, operation, namespace):
             _identity(entry["after"])
         if "shape" in entry:
             _hash(entry["shape"])
+        # A status write between review and request (#826): the reviewed
+        # identity, and each 409 the journal sent again after.
+        if ("reviewed" in entry or "retries" in entry) and entry["method"] not in ("PUT", "PATCH"):
+            raise Held("The data handoff receipt is invalid")
+        if "reviewed" in entry:
+            _identity(entry["reviewed"])
+            if entry["reviewed"]["uid"] != entry["before"]["uid"]:
+                raise Held("The data handoff receipt is invalid")
+        if "retries" in entry:
+            if not isinstance(entry["retries"], list) or not 0 < len(entry["retries"]) <= RETRIES:
+                raise Held("The data handoff receipt is invalid")
+            for retry in entry["retries"]:
+                _keys(retry, ("resourceVersion", "code"))
+                identity({"metadata": {"uid": "-", "resourceVersion": retry["resourceVersion"]}})
+                if retry["code"] != 409:
+                    raise Held("The data handoff receipt is invalid")
         if entry["state"] == "accepted" and entry["method"] != "DELETE" and not {"after", "shape"} <= set(entry):
             raise Held("The data handoff receipt is incomplete")
 
@@ -341,7 +369,9 @@ class Anchor:
         finish = (bool(old) and len(new) == len(old) and new[:-1] == old[:-1]
                   and old[-1]["state"] == "intent" and new[-1]["state"] in ("accepted", "refused", "uncertain", "unverified")
                   and all(new[-1].get(k) == v for k, v in old[-1].items() if k != "state"))
-        if not (append or finish):
+        retry = (bool(old) and len(new) == len(old) and new[:-1] == old[:-1]
+                 and old[-1]["state"] == new[-1]["state"] == "intent" and _status_retry(old[-1], new[-1]))
+        if not (append or finish or retry):
             raise Held("The data handoff journal cannot be rewritten or an uncertain request replayed")
         state = copy.deepcopy(self.state)
         state["journal"] = copy.deepcopy(job)

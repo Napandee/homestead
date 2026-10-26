@@ -1,4 +1,5 @@
 """Integration tests for the staged replacement of the legacy reclass engine."""
+import contextlib
 import copy
 import sys
 import unittest
@@ -69,7 +70,9 @@ class Cluster:
             del self.objects[path]
             result = {"apiVersion": "v1", "kind": "Status", "status": "Success", "details": {"uid": before["uid"]}}
         else:
-            assert journal.identity(body) == before
+            if journal.identity(body) != before:
+                # As the API server: a write pinned to another version is refused.
+                raise urllib.error.HTTPError(path, 409, "Conflict", {}, None)
             if method == "PUT":
                 current = self.objects[path] = copy.deepcopy(body)
             else:
@@ -678,3 +681,133 @@ class CutoverFaultTests(unittest.TestCase):
         with self.assertRaises(journal.Held): cluster.cutover()
         self.assertEqual(count, len(cluster.sent))
         self.assertEqual("Retain", cluster.objects["/api/v1/persistentvolumes/pv-copy"]["spec"]["persistentVolumeReclaimPolicy"])
+
+
+class ForeignStatusRaceTests(unittest.TestCase):
+    """#826: pv-controller and the Deployment controller write status on the
+    volumes and workloads a move changes. A status write between Homestead's
+    read and its request no longer stops the move; any other change still does."""
+
+    OLD_PV = "/api/v1/persistentvolumes/pv-data"
+    APP = "/apis/apps/v1/namespaces/lab/deployments/app"
+
+    @staticmethod
+    def status(cluster, path, **status):
+        obj = cluster.objects[path]
+        obj["status"] = {**obj.get("status", {}), **status}
+        obj["metadata"]["resourceVersion"] = str(int(obj["metadata"]["resourceVersion"]) + 1)
+
+    @contextlib.contextmanager
+    def before_review(self, step, change):
+        """change() runs once, between the stage's read and the journal's own."""
+        original = journal.Journal.write
+        def write(writer, name, *args, **kwargs):
+            if name == step and not getattr(write, "done", False):
+                write.done = True
+                change()
+            return original(writer, name, *args, **kwargs)
+        with mock.patch.object(journal.Journal, "write", write):
+            yield
+
+    @staticmethod
+    def before_request(cluster, path, change):
+        """change() runs once, between the journal's read and the API request."""
+        original = cluster.send
+        def send(method, target, body, **kwargs):
+            if method in ("PUT", "PATCH") and target == path and not getattr(send, "done", False):
+                send.done = True
+                change()
+            return original(method, target, body, **kwargs)
+        cluster.send = send
+
+    def retains(self, cluster):
+        return [b for m, p, b in cluster.sent if (m, p) == ("PATCH", self.OLD_PV) and "persistentVolumeReclaimPolicy" in b.get("spec", {})]
+
+    def test_a_volume_status_update_before_protecting_it_does_not_stop_cutover(self):
+        cluster = CutoverTests().ready()
+        with self.before_review("retain-original", lambda: self.status(cluster, self.OLD_PV, phase="Released")):
+            CutoverTests().finish(cluster)
+        [retain] = self.retains(cluster)
+        entry = handoff._receipt(cluster.item, "retain-original")
+        self.assertEqual("accepted", entry["state"])
+        self.assertNotEqual(entry["reviewed"]["resourceVersion"], retain["metadata"]["resourceVersion"])
+        self.assertEqual("Retain", cluster.objects[self.OLD_PV]["spec"]["persistentVolumeReclaimPolicy"])
+
+    def test_a_volume_status_update_racing_the_protect_request_is_retried(self):
+        cluster = CutoverTests().ready()
+        self.before_request(cluster, self.OLD_PV, lambda: self.status(cluster, self.OLD_PV, phase="Released"))
+        CutoverTests().finish(cluster)
+        first, second = self.retains(cluster)
+        self.assertNotEqual(first["metadata"]["resourceVersion"], second["metadata"]["resourceVersion"])
+        entry = handoff._receipt(cluster.item, "retain-original")
+        self.assertEqual([first["metadata"]["resourceVersion"]], [r["resourceVersion"] for r in entry["retries"]])
+        self.assertEqual("Retain", cluster.objects[self.OLD_PV]["spec"]["persistentVolumeReclaimPolicy"])
+
+    def test_a_reclaim_policy_change_before_protecting_still_holds(self):
+        cluster = CutoverTests().ready()
+        def edit():
+            cluster.objects[self.OLD_PV]["spec"]["persistentVolumeReclaimPolicy"] = "Recycle"
+            self.status(cluster, self.OLD_PV)
+        with self.before_review("retain-original", edit), self.assertRaisesRegex(journal.Held, "changed after review"):
+            CutoverTests().finish(cluster)
+        self.assertEqual([], self.retains(cluster))
+        self.assertEqual("Recycle", cluster.objects[self.OLD_PV]["spec"]["persistentVolumeReclaimPolicy"])
+
+    def test_a_reclaim_policy_change_racing_the_protect_request_is_not_retried(self):
+        cluster = CutoverTests().ready()
+        def edit():
+            cluster.objects[self.OLD_PV]["spec"]["persistentVolumeReclaimPolicy"] = "Recycle"
+            self.status(cluster, self.OLD_PV)
+        self.before_request(cluster, self.OLD_PV, edit)
+        with self.assertRaisesRegex(journal.Held, "Nothing was retried"):
+            CutoverTests().finish(cluster)
+        self.assertEqual(1, len(self.retains(cluster)))
+        self.assertEqual("refused", handoff._receipt(cluster.item, "retain-original")["state"])
+        self.assertEqual("Recycle", cluster.objects[self.OLD_PV]["spec"]["persistentVolumeReclaimPolicy"])
+
+    def restarts(self, cluster):
+        return [b for m, p, b in cluster.sent if (m, p) == ("PUT", self.APP)]
+
+    def test_a_deployment_status_update_before_its_restart_does_not_stop_it(self):
+        cluster = RestartTests().ready()
+        with self.before_review("restart:" + self.APP, lambda: self.status(cluster, self.APP, observedGeneration=2)):
+            self.assertEqual(93, cluster.restart()[1])
+        [put] = self.restarts(cluster)
+        self.assertEqual(1, put["spec"]["replicas"])
+        self.assertEqual(cluster.objects[self.APP]["metadata"]["resourceVersion"], str(int(put["metadata"]["resourceVersion"]) + 1))
+
+    def test_a_deployment_status_update_racing_its_restart_is_retried(self):
+        cluster = RestartTests().ready()
+        self.before_request(cluster, self.APP, lambda: self.status(cluster, self.APP, observedGeneration=2))
+        self.assertEqual(93, cluster.restart()[1])
+        self.assertEqual(2, len(self.restarts(cluster)))
+        self.assertEqual(1, cluster.objects[self.APP]["spec"]["replicas"])
+
+    def test_a_deployment_status_update_during_restart_admission_does_not_stop_it(self):
+        cluster = RestartTests().ready()
+        def admit(proposals):
+            self.status(cluster, self.APP, observedGeneration=2)
+            return {"blocked": False}
+        self.assertEqual(93, cluster.restart(admit)[1])
+        self.assertEqual(1, cluster.objects[self.APP]["spec"]["replicas"])
+
+    def test_a_pod_template_change_before_the_restart_still_holds(self):
+        cluster = RestartTests().ready()
+        def edit():
+            cluster.objects[self.APP]["spec"]["template"]["spec"]["containers"][0]["image"] = "example/app:2"
+            self.status(cluster, self.APP)
+        with self.before_review("restart:" + self.APP, edit), self.assertRaises(journal.Held):
+            cluster.restart()
+        self.assertEqual([], self.restarts(cluster))
+        self.assertEqual(0, cluster.objects[self.APP]["spec"]["replicas"])
+
+    def test_a_replica_change_racing_the_restart_is_not_retried(self):
+        cluster = RestartTests().ready()
+        def edit():
+            cluster.objects[self.APP]["spec"]["replicas"] = 3
+            self.status(cluster, self.APP)
+        self.before_request(cluster, self.APP, edit)
+        with self.assertRaisesRegex(journal.Held, "Nothing was retried"):
+            cluster.restart()
+        self.assertEqual(1, len(self.restarts(cluster)))
+        self.assertEqual(3, cluster.objects[self.APP]["spec"]["replicas"])
