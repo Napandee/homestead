@@ -266,14 +266,23 @@ def edit(request):
 
 
 def move_to_host(request):
-    """Another host for a container, after its capacity review."""
+    """Another host for a container, after its capacity review: its image
+    pulled onto that host first, and where it landed checked
+    (homestead_host_move.py)."""
+    import homestead_host_move as HOST_MOVE
     b = request.body
-    result = reviewed_host_move(b)
-    result["operation"] = OPS.start(
-        "deployment", f"Move {b['name']}",
-        {"kind": "Deployment", "name": b["name"], "namespace": b["ns"]},
-        "/containers", {"namespace": b["ns"], "name": b["name"], "undo": "rollout"})
-    return result
+    proposed, capacity, context = move_capacity_plan(b)
+    CAPACITY_REVIEW.enforce(b, capacity, context)
+    meta = proposed["metadata"]
+
+    def apply():
+        # Preserve resourceVersion: a concurrent controller edit must conflict,
+        # never be silently overwritten by a second, unreviewed fetch-and-move.
+        ksend("PUT", f"/apis/apps/v1/namespaces/{meta['namespace']}/deployments/{meta['name']}", proposed)
+        PLACE._bust("wl", "ov", "flow", "nodes", "impact:")
+    operation = HOST_MOVE.start(b, proposed, capacity, apply)
+    return {"ok": True, "moved": meta["name"], "to": capacity["move"]["node"] or "any node",
+            "mode": capacity["move"]["mode"], "operation": operation}
 
 
 def get_workloads(pods=None):

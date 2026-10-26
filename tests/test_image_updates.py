@@ -11,6 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_updates as updates
+import homestead_update_checks as checks
 
 
 DEPLOYMENT = {
@@ -69,6 +70,35 @@ class ImageUpdateTests(unittest.TestCase):
         self.assertTrue(check["available"])
         self.assertEqual(before, self.dep)
         self.assertEqual([], self.sent)
+
+    def test_an_image_set_to_another_tag_since_the_last_update_follows_that_tag(self):
+        # Frigate: updated to 0.18.0 (pinned, recorded), then Edit set :stable,
+        # which ran 0.18.2. Checking the old record offered 0.18.0's build as
+        # a "new build" - an update that rolled it back.
+        stable, old = "sha256:" + "a" * 64, "sha256:" + "b" * 64
+        self.dep["metadata"]["annotations"][updates.TRACKED] = json.dumps({"demo": "ghcr.io/x/frigate:0.18.0"})
+        self.dep["spec"]["template"]["spec"]["containers"][0]["image"] = "ghcr.io/x/frigate:stable"
+        pod = {"metadata": {"namespace": "lab", "labels": {"app": "demo"}},
+               "status": {"containerStatuses": [{"name": "demo", "imageID": "ghcr.io/x/frigate@" + stable, "state": {"running": {}}}]}}
+        builds = {"stable": stable, "0.18.0": old}
+        with mock.patch.object(updates, "_secret_credentials", return_value={}), \
+                mock.patch.object(updates, "registry_tags", return_value=["0.18.0", "stable"]), \
+                mock.patch.object(updates, "manifest_info", side_effect=lambda ref, *a, **k: {
+                    "digest": builds[updates.parse_image(ref)["tag"]], "children": []}):
+            check = updates._check_deployment(self.dep, [pod], True, persist=False)
+        image = check["images"][0]
+        self.assertEqual("ghcr.io/x/frigate:stable", image["source"])
+        self.assertFalse(image["available"], image)
+
+    def test_the_recorded_tag_still_counts_while_the_image_is_its_digest_pin(self):
+        pin = "ghcr.io/x/frigate@sha256:" + "a" * 64
+        self.assertEqual("ghcr.io/x/frigate:stable", checks.followed("ghcr.io/x/frigate:stable", pin))
+        self.assertEqual("esphome/esphome:latest", checks.followed("esphome/esphome:latest", "docker.io/esphome/esphome@sha256:" + "c" * 64))
+        self.assertEqual("ghcr.io/x/other@sha256:" + "a" * 64, checks.followed("ghcr.io/x/frigate:stable", "ghcr.io/x/other@sha256:" + "a" * 64),
+                         "a pin of another repository is not the record's")
+        self.assertEqual("nginx:1.27.0", checks.followed("", "nginx:1.27.0"))
+        self.assertEqual("postgres:17-alpine@sha256:" + "d" * 64, checks.followed("postgres:16-alpine", "postgres:17-alpine@sha256:" + "d" * 64),
+                         "pinned in git as tag@digest: it names the tag it follows itself")
 
     def test_apps_gitops_or_an_administrator_updates_are_named_and_not_updated_here(self):
         # #296: Flux and Argo CD by the marks they leave; an administrator's mark for the rest.

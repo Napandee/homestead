@@ -134,8 +134,12 @@ def inventory():
     return hosts, volumes
 
 
-def plan(exclude=()):
-    """The fewest moves that bring hosts closest, without the apps excluded."""
+def plan(exclude=(), follow=()):
+    """The fewest moves that bring hosts closest, without the apps excluded.
+    follow is the container moves reviewed beside it, (app, host) pairs:
+    first, each of those apps' volumes gets a copy on its new host, so its
+    reads stay local there - moved from the fullest host holding one that
+    it is not attached to."""
     hosts, volumes = inventory()
     exclude = set(exclude or ())
     load = {name: h["load"] for name, h in hosts.items()}
@@ -160,6 +164,31 @@ def plan(exclude=()):
                 and v["size"] < gap                     # a move that narrows the gap
                 and v["size"] >= GIB                    # and is worth a move: tiny ones barely change it
                 and disk_room(target, v) > v["size"]]
+    def take(best, source, target, **extra):
+        moves.append({"volume": best["name"], "claim": best["claim"], "app": best["app"], "from": source, "to": target,
+                      "size_gb": round(best["size"] / GIB, 1), "attached": bool(best["attached"]), **extra})
+        moved.add(best["name"])
+        load[source] -= best["size"]
+        load[target] += best["size"]
+        room[target] -= best["size"]
+        usable = [d for d in hosts[target]["disks"] if d["takes"] and best["disk_tags"] <= d["tags"]]
+        disk = max(usable, key=lambda d: d["available"] - planned.get((target, id(d)), 0))
+        planned[(target, id(disk))] = planned.get((target, id(disk)), 0) + best["size"]
+        best["hosts"] = [h for h in best["hosts"] if h != source] + [target]
+
+    unfollowed = []
+    for app, target in follow or ():
+        for v in movable:
+            if v["app"] != app or v["name"] in moved or target in v["hosts"] or len(moves) >= MAX_MOVES:
+                continue
+            sources = [h for h in v["hosts"] if h != v["attached"]]
+            why = ("" if target in takers and sources and disk_room(target, v) > v["size"] else
+                   f"{target} takes no new copies" if target not in takers else
+                   "its only copies are where it is attached now" if not sources else f"{target} has no room for it")
+            if why:
+                unfollowed.append({"claim": v["claim"], "why": f"no copy follows {app} to {target}: {why}"})
+                continue
+            take(v, max(sources, key=load.get), target, follows=app)
     while len(moves) < MAX_MOVES and takers:
         target = min(takers, key=lambda h: load[h])
         # The fullest host that has something it can give; two equally full
@@ -175,16 +204,7 @@ def plan(exclude=()):
                 break
         if not best:
             break
-        moves.append({"volume": best["name"], "claim": best["claim"], "app": best["app"], "from": source, "to": target,
-                      "size_gb": round(best["size"] / GIB, 1), "attached": bool(best["attached"])})
-        moved.add(best["name"])
-        load[source] -= best["size"]
-        load[target] += best["size"]
-        room[target] -= best["size"]
-        usable = [d for d in hosts[target]["disks"] if d["takes"] and best["disk_tags"] <= d["tags"]]
-        disk = max(usable, key=lambda d: d["available"] - planned.get((target, id(d)), 0))
-        planned[(target, id(disk))] = planned.get((target, id(disk)), 0) + best["size"]
-        best["hosts"] = [h for h in best["hosts"] if h != source] + [target]
+        take(best, source, target)
     before = {name: h["load"] for name, h in hosts.items()}
     apps = sorted({v["app"] for v in volumes if not v["why"] and v["size"] > 0
                    and any(m["app"] == v["app"] for m in moves)} | (exclude & {v["app"] for v in volumes}))
@@ -195,7 +215,7 @@ def plan(exclude=()):
             "moves": moves, "apps": apps, "excluded": sorted(exclude),
             # Why nothing moves when the emptiest host is the one that cannot take copies.
             "closed": sorted(name for name, h in hosts.items() if not h["takes"]),
-            "skipped": [{"claim": v["claim"], "why": v["why"]} for v in volumes if v["why"]],
+            "skipped": [{"claim": v["claim"], "why": v["why"]} for v in volumes if v["why"]] + unfollowed,
             "review_token": token}
 
 
@@ -404,7 +424,9 @@ def start_reviewed(b):
 
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
-    ("GET", "/api/longhorn/rebalance/plan"): ("viewer", lambda request: plan([a for a in (request.query.get("exclude") or [""])[0].split(",") if a])),
+    ("GET", "/api/longhorn/rebalance/plan"): ("viewer", lambda request: plan(
+        [a for a in (request.query.get("exclude") or [""])[0].split(",") if a],
+        [tuple(pair.rsplit(":", 1)) for pair in (request.query.get("follow") or [""])[0].split(",") if pair.count(":") >= 1])),
     ("POST", "/api/longhorn/rebalance"): ("operator", lambda request: start_reviewed(request.body)),
 }
 
