@@ -39,13 +39,23 @@ test("nothing to offer is no row; a failed read is said, not hidden", () => {
   assert.ok(H.advice({ ...base(), copies: null }).some(r => r.id === "unknown:copies"));
 });
 
-test("a volume warning that is only short of hosts opens the offer", () => {
+const SHORT = [{ kind: "Volume", name: "photos", severity: "degraded", one_host: true, reason: "This cluster has one host" },
+  { kind: "Volume", name: "notes", severity: "degraded", one_host: true, reason: "This cluster has one host" },
+  { kind: "Volume", name: "other", severity: "degraded", reason: "Longhorn is rebuilding or missing a replica" }];
+
+test("the volumes short of hosts are said once, in the offer's row, not once each", () => {
   const s = base(LOWER);
-  s.overview.health_issues = [{ kind: "Volume", name: "photos", severity: "degraded", one_host: true, reason: "This cluster has one host" },
-    { kind: "Volume", name: "other", severity: "degraded", reason: "Longhorn is rebuilding or missing a replica" }];
+  s.overview.health_issues = SHORT;
   const rows = H.advice(s);
-  assert.equal(rows.find(r => r.id === "condition:Volume:photos").route, "one-host-copies");
+  assert.equal(rows.filter(r => r.id.startsWith("condition:Volume:") && r.id !== "condition:Volume:other").length, 0);
+  assert.equal(rows.filter(r => r.id === "one-host-copies").length, 1);
   assert.equal(rows.find(r => r.id === "condition:Volume:other").route, "storage");
+});
+
+test("without the offer's row, a volume short of hosts still shows and opens the offer", () => {
+  const s = base({ state: "unknown", hosts: 0, volumes: [], error: "x" });
+  s.overview.health_issues = SHORT;
+  assert.equal(H.advice(s).find(r => r.id === "condition:Volume:photos").route, "one-host-copies");
 });
 
 function setup(facts, answer = { ok: true, changed: ["pvc-a", "pvc-b"], message: "2 volumes now keep one copy" }) {
@@ -75,7 +85,9 @@ test("the review lists each volume, its app and its count before and after, and 
   const shown = t.modals.at(-1);
   assert.equal(shown.title, "Match copies to hosts");
   for (const text of ["photos", "media/immich", "notes", "docs/notes", "3 → 1", "2 → 1"]) assert.ok(shown.html.includes(text), text);
-  assert.match(shown.html, /data-need="admin"[^>]*>Match copies</);
+  // The button names the result (design.md, Reviews).
+  assert.match(shown.html, /data-need="admin"[^>]*>Lower 2</);
+  assert.doesNotMatch(shown.html, /healthy/, "no promise the checks cannot keep");
   assert.deepEqual(t.sent.map(s => s.method), ["GET"]);
 });
 
@@ -94,6 +106,7 @@ test("putting copies back is the same review, named for what it does", async () 
   await t.ctx.oneHostCopiesReview();
   assert.equal(t.modals.at(-1).title, "Put copies back");
   assert.ok(t.modals.at(-1).html.includes("1 → 2"));
+  assert.match(t.modals.at(-1).html, /data-need="admin"[^>]*>Raise 1</);
   await t.ctx.oneHostCopiesApply();
   assert.equal(t.sent.find(s => s.method === "POST").body.action, "raise");
 });
@@ -111,4 +124,11 @@ test("with nothing to offer the dialog says so and has no action", async () => {
   await t.ctx.oneHostCopiesReview();
   assert.doesNotMatch(t.modals.at(-1).html, /oneHostCopiesApply/);
   assert.match(t.modals.at(-1).html, /Nothing to change/);
+});
+
+test("where Homestead does not manage copies, the dialog does not claim they fit", async () => {
+  const t = setup({ state: "n/a", hosts: 0, volumes: [] });
+  await t.ctx.oneHostCopiesReview();
+  assert.doesNotMatch(t.modals.at(-1).html, /fit the hosts/);
+  assert.match(t.modals.at(-1).html, /Nothing to change on this cluster/);
 });

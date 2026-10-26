@@ -640,11 +640,13 @@ class DoctorTests(unittest.TestCase):
         self.assertIn("+ k3s kubectl delete pods -A --field-selector=status.phase=Failed", out)
         self.assertNotIn("delete pod plex-1", out, "restarting failing pods is asked, never automatic")
 
-    def longhorn(self, rows, nodes="node1 Ready control-plane 1d v1.31"):
+    def longhorn(self, rows, nodes="node1 Ready control-plane 1d v1.31", lh_nodes="node1 true true\\n"):
         """The k3s stand-in with Longhorn installed: its volumes as name,
-        robustness and the Scheduled condition's reason."""
+        robustness and the Scheduled condition's reason, and Longhorn's node
+        records."""
         text = STUBS["k3s"].replace('  *"get crd"*) exit 1 ;;',
-                                    '  *"get crd"*) exit 0 ;;\n  *"get volumes.longhorn.io"*) printf "%b" "' + rows + '" ;;')
+                                    '  *"get crd"*) exit 0 ;;\n  *"get volumes.longhorn.io"*) printf "%b" "' + rows + '" ;;'
+                                    '\n  *"get nodes.longhorn.io"*) printf "%b" "' + lh_nodes + '" ;;')
         text = text.replace('"get nodes --no-headers") echo "node1 Ready control-plane 1d v1.31" ;;',
                             '"get nodes --no-headers") printf "%b" "' + nodes + '\\n" ;;')
         Path(self.bin, "k3s").write_text(text + "\n", encoding="utf-8", newline="\n")
@@ -660,6 +662,12 @@ class DoctorTests(unittest.TestCase):
         self.assertIn("This cluster has one host", out)
         self.assertIn("Match copies to hosts", out)
         self.assertNotIn("rebuild automatically", out)
+
+    def test_one_node_with_two_longhorn_records_is_not_one_host(self):
+        # #809's test: one Kubernetes node and one Longhorn node record.
+        out = self.longhorn("pvc-a degraded ReplicaSchedulingFailure\\n", lh_nodes="node1 true true\\nnode2 true true\\n")
+        self.assertIn("pvc-a (degraded)", out)
+        self.assertNotIn("Match copies to hosts", out)
 
     def test_otherwise_the_longhorn_check_is_as_before(self):
         out = self.longhorn("pvc-a degraded ReplicaSchedulingFailure\\n",

@@ -16,6 +16,7 @@ import time
 import urllib.request, urllib.parse, urllib.error
 import homestead_alert_webhook as ALERT_WEBHOOK
 import homestead_alerts as ALERTS
+import homestead_app_copies as APP_COPIES
 import homestead_api_v1 as API_V1
 import homestead_audit as AUDIT_LOG
 import homestead_auth as AUTH
@@ -692,7 +693,16 @@ def get_overview(nodes=None, wl=None, vols=None, pods=None):
                                        cached("trim-health", 60, WEEKLY_TRIM.last_state))
     except Exception:
         protection = []
-    health = CLUSTER.classify_cluster_health(nodes, wl, vols, protection=protection)
+    # On one host, the degraded volumes Match copies to hosts offers to lower
+    # (#841) say why; read only then, and a failed read says nothing new.
+    short = set()
+    if len(nodes) == 1 and deg:
+        try:
+            offer = APP_COPIES.cached_facts()
+            short = {row["volume"] for row in offer["volumes"]} if offer.get("state") == "lower" else set()
+        except Exception:
+            short = set()
+    health = CLUSTER.classify_cluster_health(nodes, wl, vols, protection=protection, short_of_hosts=short)
     tcap = sum(n["cpu_cap"] for n in nodes) or 1
     tuse = sum(n["cpu_used"] for n in nodes)
     mcap = sum(n["mem_cap_gb"] for n in nodes) or 1

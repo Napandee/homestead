@@ -52,7 +52,10 @@ const HealthInsights = (() => {
       }
     }
     // Keep the exact reasons behind the dashboard banner visible here too.
+    // Volumes short of hosts are said once, in the offer's own row below (#841).
+    const offerRow=data.copies?.state==="lower" && data.copies.volumes?.length;
     for(const issue of data.overview?.health_issues || []) {
+      if(issue.one_host && offerRow)continue;
       const id=issue.kind==="Disk"?"disk:"+issue.name.replace("/",":"):issue.kind==="Node"?"node:"+issue.name:"condition:"+issue.kind+":"+issue.name;
       const existing=rows.findIndex(row=>row.id===id), severity=issue.severity==="critical"?"critical":"medium";
       // A volume only short of hosts (#841) opens the offer to match its copies.

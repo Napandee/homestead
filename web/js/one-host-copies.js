@@ -18,20 +18,21 @@ async function oneHostCopiesReview() {
   const title = raise ? "Put copies back" : "Match copies to hosts";
   if (!oneHostCopiesShown) {
     const why = facts.state === "unknown" ? UI.callout("warn", "Could not read volume copies", esc(facts.error || "")) :
-      UI.empty("Nothing to change: every volume's copies fit the hosts.");
+      UI.empty(facts.state === "n/a" ? "Nothing to change on this cluster: Homestead does not match Longhorn copies here."
+        : "Nothing to change: every volume's copies fit the hosts.");
     return modal(title, why + UI.actions(UI.cancel("Close")));
   }
   const n = rows.length, volumes = `${n} volume${n === 1 ? "" : "s"}`;
   const lead = raise
     ? `Raises ${volumes} back to the copies ${n === 1 ? "it" : "they"} asked for, now that ${facts.hosts} hosts can hold them.`
-    : `Lowers ${volumes} to the one copy this host can hold, so ${n === 1 ? "it reads" : "they read"} healthy.`;
+    : `Lowers ${volumes} to the one copy this host can hold.`;
   const table = UI.table([{ label: "Volume" }, { label: "App" }, { label: "Copies", className: "mono" }],
     rows.map(r => [esc(r.claim || r.volume), esc(r.app || "—"), esc(`${r.from} → ${r.to}`)]));
   const details = raise
-    ? "Longhorn makes each new copy on another host while the volume stays in use. A volume keeps the count it asked for on itself until it has all of it back."
+    ? "Longhorn makes each new copy on another host while the volume stays in use. A volume keeps the count it asked for on itself until it has all of it back. A volume kept to tagged hosts or disks can still read degraded if fewer of those exist."
     : "The data stays whole and nothing moves. Each volume keeps the count it asked for, so it can be put back when a host joins. No storage class or Longhorn setting changes, and volumes made later still ask for their class's count.";
   modal(title, UI.lead(esc(lead)) + table + UI.more("What changes", `<p>${esc(details)}</p>`) +
-    UI.actions(UI.button(raise ? "Put copies back" : "Match copies", "oneHostCopiesApply()", { kind: "pri", id: "ohc_apply", attrs: 'data-need="admin"' }), UI.cancel()));
+    UI.actions(UI.button(`${raise ? "Raise" : "Lower"} ${n}`, "oneHostCopiesApply()", { kind: "pri", id: "ohc_apply", attrs: 'data-need="admin"' }), UI.cancel()));
 }
 
 async function oneHostCopiesApply() {

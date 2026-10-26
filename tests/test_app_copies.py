@@ -46,18 +46,18 @@ def volume(name, copies=3, robustness="degraded", unschedulable=True, claim="", 
                                             "workloadsStatus": workloads}}}
 
 
-def engines_path(pv):
-    return f"/apis/longhorn.io/v1beta2/namespaces/longhorn-system/engines?labelSelector=longhornvolume%3D{pv}"
+ENGINES = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system/engines"
 
 
-def engines(pv, *modes):
-    return {"items": [{"spec": {"volumeName": pv},
-                       "status": {"replicaModeMap": {f"{pv}-r-{i}": mode for i, mode in enumerate(modes)}}}]}
+def engine(pv, *modes):
+    return {"spec": {"volumeName": pv},
+            "status": {"replicaModeMap": {f"{pv}-r-{i}": mode for i, mode in enumerate(modes)}}}
 
 
 class Cluster:
-    """Homestead's own data volume is pvc-own; the app volumes are the rest."""
-    def __init__(self, nodes, lh_nodes, volumes):
+    """Homestead's own data volume is pvc-own; the app volumes are the rest.
+    Every engine is read in one list; modes[pv] sets a volume's copies."""
+    def __init__(self, nodes, lh_nodes, volumes, failing_patch=None):
         deployment = {"spec": {"template": {"spec": {"volumes": [
             {"name": "data", "persistentVolumeClaim": {"claimName": "homestead-data"}}]}}}}
         self.objects = {
@@ -68,21 +68,29 @@ class Cluster:
             "/api/v1/namespaces/lab/persistentvolumeclaims/homestead-data": {
                 "spec": {"volumeName": "pvc-own", "storageClassName": "longhorn"}},
         }
+        self.modes = {}
         for v in volumes:
             name = v["metadata"]["name"]
             self.objects[f"{VOLUMES}/{name}"] = v
-            self.objects[engines_path(name)] = engines(name, "RW")
+            self.modes[name] = ("RW",)
         self.sent = []
+        self.read = []
         self.fail = set()
+        self.failing_patch = failing_patch
 
     def kget(self, path):
+        self.read.append(path)
         if path in self.fail:
             raise KeyError(path)
+        if path == ENGINES:
+            return {"items": [engine(pv, *modes) for pv, modes in self.modes.items()]}
         if path not in self.objects:
             raise urllib.error.HTTPError(path, 404, "not found", {}, None)
         return self.objects[path]
 
     def ksend(self, method, path, body=None, ctype=""):
+        if path == self.failing_patch:
+            raise urllib.error.HTTPError(path, 409, "conflict", {}, None)
         self.sent.append((method, path, body))
 
 
@@ -132,9 +140,14 @@ class OfferTests(Base):
 
     def test_a_copy_rebuilding_is_never_offered(self):
         cluster = Cluster(*ONE, [volume("pvc-a"), volume("pvc-b")])
-        cluster.objects[engines_path("pvc-a")] = engines("pvc-a", "RW", "WO")
+        cluster.modes["pvc-a"] = ("RW", "WO")
         self.bind(cluster)
         self.assertEqual(["pvc-b"], [v["volume"] for v in APP_COPIES.facts()["volumes"]])
+
+    def test_the_engines_are_read_once_for_every_volume(self):
+        cluster = self.bind(Cluster(*ONE, [volume(f"pvc-{i}") for i in range(5)]))
+        self.assertEqual(5, len(APP_COPIES.facts()["volumes"]))
+        self.assertEqual(1, sum(1 for path in cluster.read if "/engines" in path))
 
     def test_a_bigger_cluster_with_a_host_down_offers_nothing(self):
         for nodes, lh_nodes in (([node("node-1"), node("node-2", ready=False)], [lh_node("node-1"), lh_node("node-2", ready=False)]),
@@ -153,7 +166,7 @@ class OfferTests(Base):
                 self.assertEqual({"state": "n/a", "hosts": 0, "volumes": []}, APP_COPIES.facts())
 
     def test_failed_reads_offer_nothing_and_say_so(self):
-        for path in ("/api/v1/nodes", LH_NODES, VOLUMES, engines_path("pvc-a"),
+        for path in ("/api/v1/nodes", LH_NODES, VOLUMES, ENGINES,
                      "/apis/apps/v1/namespaces/lab/deployments/homestead"):
             with self.subTest(path=path):
                 cluster = Cluster(*ONE, [volume("pvc-a")])
@@ -192,10 +205,39 @@ class LowerTests(Base):
 
     def test_a_volume_that_started_rebuilding_since_the_review_is_refused(self):
         cluster = Cluster(*ONE, [volume("pvc-a")])
-        cluster.objects[engines_path("pvc-a")] = engines("pvc-a", "RW", "WO")
+        cluster.modes["pvc-a"] = ("RW", "WO")
         self.bind(cluster)
         self.assertFalse(APP_COPIES.apply(self.reviewed(("pvc-a", 3, 1)))["ok"])
         self.assertEqual([], cluster.sent)
+
+    def test_lowering_again_keeps_the_count_first_asked_for(self):
+        # 3 -> 1 on one host, back to 2 when a host joined, and one host again.
+        cluster = self.bind(Cluster(*ONE, [volume("pvc-a", copies=2, lowered_from=3)]))
+        self.assertTrue(APP_COPIES.apply(self.reviewed(("pvc-a", 2, 1)))["ok"])
+        self.assertEqual({KEY: "3"}, cluster.sent[0][2]["metadata"]["annotations"])
+
+    def test_a_refused_change_says_what_did_change(self):
+        cluster = self.bind(Cluster(*ONE, [volume("pvc-a"), volume("pvc-b"), volume("pvc-c")],
+                                    failing_patch=f"{VOLUMES}/pvc-b"))
+        out = APP_COPIES.apply(self.reviewed(("pvc-a", 3, 1), ("pvc-b", 3, 1), ("pvc-c", 3, 1)))
+        self.assertFalse(out["ok"])
+        self.assertEqual(["pvc-a", "pvc-c"], out["changed"])
+        self.assertEqual([f"{VOLUMES}/pvc-a", f"{VOLUMES}/pvc-c"], [path for _, path, _ in cluster.sent])
+        self.assertEqual(["pvc-b"], [f["volume"] for f in out["failed"]])
+        self.assertIn("pvc-b", out["message"])
+        self.assertIn("2 volumes", out["message"])
+
+    def test_the_offer_is_read_afresh_after_any_change(self):
+        import homestead_routes
+        forgotten = []
+        saved = homestead_routes.forget
+        homestead_routes.forget = forgotten.append
+        try:
+            self.bind(Cluster(*ONE, [volume("pvc-a")], failing_patch=f"{VOLUMES}/pvc-a"))
+            APP_COPIES.apply(self.reviewed(("pvc-a", 3, 1)))
+        finally:
+            homestead_routes.forget = saved
+        self.assertEqual([APP_COPIES.CACHE], forgotten)
 
     def test_failed_reads_change_nothing(self):
         cluster = Cluster(*ONE, [volume("pvc-a")])

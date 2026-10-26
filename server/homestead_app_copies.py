@@ -49,18 +49,23 @@ def _row(volume, have, want):
             "namespace": k8s.get("namespace", ""), "app": REBALANCE._app(volume), "from": have, "to": want}
 
 
+def _rebuilding():
+    """The volumes with a copy being rebuilt (WO), from one read of every
+    engine. Raises when the engines cannot be read: the caller offers nothing."""
+    found = NODE_PARITY.kget(DATA_COPIES.ENGINES) or {}
+    return {(engine.get("spec") or {}).get("volumeName") for engine in found.get("items") or []
+            if "WO" in ((engine.get("status") or {}).get("replicaModeMap") or {}).values()}
+
+
 def _lower(volumes):
-    rows = []
-    for volume in volumes:
-        have = int((volume.get("spec") or {}).get("numberOfReplicas") or 0)
-        if have <= 1 or (volume.get("status") or {}).get("robustness") != "degraded" \
-                or not DATA_COPIES._cannot_place(volume):
-            continue
-        # Raises when the engines cannot be read: the caller offers nothing.
-        if DATA_COPIES._rebuilding(volume["metadata"]["name"]):
-            continue
-        rows.append(_row(volume, have, 1))
-    return rows
+    candidates = [(volume, int((volume.get("spec") or {}).get("numberOfReplicas") or 0)) for volume in volumes]
+    candidates = [(volume, have) for volume, have in candidates
+                  if have > 1 and (volume.get("status") or {}).get("robustness") == "degraded"
+                  and DATA_COPIES._cannot_place(volume)]
+    if not candidates:
+        return []
+    rebuilding = _rebuilding()
+    return [_row(volume, have, 1) for volume, have in candidates if volume["metadata"]["name"] not in rebuilding]
 
 
 def _raise(volumes, hosts):
@@ -121,23 +126,35 @@ def apply(body):
     if not reviewed or any(offered.get(name, {}).get("from") != have or offered.get(name, {}).get("to") != want
                            for name, have, want in reviewed):
         return {"ok": False, "changed": [], "message": "The volumes changed since the review. Nothing was changed; review again"}
-    changed = []
-    for name, have, want in reviewed:
-        if action == "lower":
-            patch = {"metadata": {"annotations": {LOWERED_FROM: str(have)}}, "spec": {"numberOfReplicas": want}}
-        else:
-            volume = NODE_PARITY.kget(f"{NODE_PARITY.LH_VOLUMES}/{name}") or {}
-            patch = {"spec": {"numberOfReplicas": want}}
-            if want >= _recorded(volume):
-                patch = {"metadata": {"annotations": {LOWERED_FROM: None}}, **patch}
-        NODE_PARITY.ksend("PATCH", f"{NODE_PARITY.LH_VOLUMES}/{name}", patch, ctype="application/merge-patch+json")
-        changed.append(name)
-    homestead_routes.forget(CACHE)
+    changed, failed = [], []
+    try:
+        for name, have, want in reviewed:
+            try:
+                volume = NODE_PARITY.kget(f"{NODE_PARITY.LH_VOLUMES}/{name}") or {}
+                if action == "lower":
+                    # A volume lowered before, raised part way, then lowered
+                    # again keeps the count it first asked for.
+                    patch = {"metadata": {"annotations": {LOWERED_FROM: str(max(have, _recorded(volume)))}},
+                             "spec": {"numberOfReplicas": want}}
+                else:
+                    patch = {"spec": {"numberOfReplicas": want}}
+                    if want >= _recorded(volume):
+                        patch = {"metadata": {"annotations": {LOWERED_FROM: None}}, **patch}
+                NODE_PARITY.ksend("PATCH", f"{NODE_PARITY.LH_VOLUMES}/{name}", patch,
+                                  ctype="application/merge-patch+json")
+                changed.append(name)
+            except Exception as error:
+                failed.append({"volume": name, "error": str(error)[:160] or type(error).__name__})
+    finally:
+        homestead_routes.forget(CACHE)
     count = f"{len(changed)} volume{'' if len(changed) == 1 else 's'}"
-    return {"ok": True, "changed": changed,
-            "message": (f"{count} now keep{'s' if len(changed) == 1 else ''} one copy, as this host can hold. "
-                        "The count each asked for is kept on it" if action == "lower" else
-                        f"{count} {'has' if len(changed) == 1 else 'have'} copies back; Longhorn is making them")}
+    message = (f"{count} now keep{'s' if len(changed) == 1 else ''} one copy, as this host can hold. "
+               "The count each asked for is kept on it" if action == "lower" else
+               f"{count} {'has' if len(changed) == 1 else 'have'} copies back; Longhorn is making them")
+    if failed:
+        message = (f"{message}. Not changed: " if changed else "Nothing was changed: ") + \
+            "; ".join(f"{f['volume']} ({f['error']})" for f in failed)
+    return {"ok": not failed, "changed": changed, "failed": failed, "message": message}
 
 
 ROUTES = {

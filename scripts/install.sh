@@ -1433,13 +1433,16 @@ $stuck
 This usually means their node is unavailable. The fix force-deletes them so that their workloads can start on other nodes." fix_terminating no; fi
   if kc get crd volumes.longhorn.io >/dev/null; then
     # On one host, a volume Longhorn cannot place more copies of reads
-    # degraded for good: it is short of hosts, not rebuilding (#841).
-    one=0; [ "$(kc get nodes --no-headers | wc -l | tr -d ' ')" = 1 ] && one=1
+    # degraded for good: it is short of hosts, not rebuilding (#841). One
+    # host is one Kubernetes node and one Longhorn node record, as Homestead counts it.
+    one=0
+    [ "$(kc get nodes --no-headers | wc -l | tr -d ' ')" = 1 ] &&
+      [ "$(kc -n longhorn-system get nodes.longhorn.io --no-headers | wc -l | tr -d ' ')" = 1 ] && one=1
     bad=$(kc -n longhorn-system get volumes.longhorn.io --no-headers -o 'custom-columns=N:.metadata.name,R:.status.robustness,S:.status.conditions[?(@.type=="Scheduled")].reason' |
       awk -v one="$one" '$2=="faulted" {print $1" (faulted)"} $2=="degraded" {print $1 (one==1 && $3=="ReplicaSchedulingFailure" ? " (degraded: more copies than hosts)" : " (degraded)")}')
     if [ -n "$bad" ]; then
       why=""
-      case "$bad" in *"more copies than hosts"*) why="This cluster has one host, so Longhorn keeps one copy of each volume, and a volume that asks for more reads degraded. Its data is whole. In Homestead, an admin can match the copies to the host count: Cluster > Health > Match copies to hosts." ;; esac
+      case "$bad" in *"more copies than hosts"*) why="This cluster has one host, so Longhorn keeps one copy of each volume, and a volume that asks for more reads degraded. In Homestead, an admin can match the copies to the host count: Cluster > Health > Match copies to hosts." ;; esac
       case "$bad" in *"(degraded)"*) why="${why:+$why }Degraded volumes rebuild automatically when a node with capacity is available." ;; esac
       case "$bad" in *"(faulted)"*) why="${why:+$why }Faulted volumes must be restored from a backup (Homestead: Data Protection)." ;; esac
       title="Longhorn volumes ask for more copies than this host can hold"
