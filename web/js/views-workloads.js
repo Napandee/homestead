@@ -1225,7 +1225,7 @@ window.wlScaleGo = async (ns, name, n, confirmed = false, reviewed = false) => {
 const BALANCE = {};
 const balanceReset = () => {
   BALANCE.containers = { on: true, exclude: new Set(), plan: null };
-  BALANCE.volumes = { on: true, exclude: new Set(), plan: null };
+  BALANCE.volumes = { on: true, exclude: new Set(), plan: null, follow: true };
 };
 window.balanceHosts = async (start = "containers") => {
   balanceReset();
@@ -1248,7 +1248,7 @@ async function balancePlan(kind) {
   if (!pane) return;
   const path = kind === "containers" ? "/api/workloads/rebalance/plan" : "/api/longhorn/rebalance/plan";
   // Volume copies follow the containers moved, so each reads locally on its new host.
-  const follow = kind === "volumes" ? balanceMoves("containers").map(m => `${m.id}:${m.to}`).join(",") : "";
+  const follow = kind === "volumes" && b.follow ? balanceMoves("containers").map(m => `${m.id}:${m.to}`).join(",") : "";
   try { b.plan = await api(`${path}?${new URLSearchParams({ exclude: [...b.exclude].join(","), ...(follow ? { follow } : {}) })}`); }
   catch (e) { b.plan = null; pane.innerHTML = UI.callout("bad", "Could not work out a plan", esc(e.message)); balanceReview(); return; }
   if (!$(kind === "containers" ? "#balContainers" : "#balVolumes")) return;
@@ -1306,6 +1306,9 @@ function balanceVolumesHtml(b) {
   });
   return [
     balanceSwitch("volumes", b, "Balance volume copies"),
+    b.on && balanceMoves("containers").length ? `<label class="switch balance-switch"><input type="checkbox" id="balFollow" ${b.follow ? "checked" : ""}
+      onchange="balanceFollow(this.checked)"> Move a copy of each moved container's volumes to its new host</label>
+      <p class="ui-help">So it reads its data locally there. Off, its volumes stay where they are and it reads them over the network.</p>` : "",
     UI.lead(!b.on ? "Volume copies are left where they are."
       : moves.length ? `Moves ${moves.length} cop${moves.length === 1 ? "y" : "ies"} so hosts hold similar amounts${moves.some(m => m.follows) ? ", and so each container moved has a copy of its volumes on its new host" : ""}. Nothing restarts: each copy is built on its new host before the old one is removed.`
       : (plan.closed || []).length ? `Nothing can move now: ${plan.closed.map(esc).join(", ")} ${plan.closed.length === 1 ? "takes" : "take"} no new copies - cordoned, not Ready, or with scheduling off in Longhorn.`
@@ -1338,6 +1341,7 @@ function balanceReview() {
 }
 // The volume plan follows the container moves: worked out again when they change.
 const balanceReplanVolumes = () => { BALANCE.volumes.plan = null; balanceReview(); return balancePlan("volumes"); };
+window.balanceFollow = on => { BALANCE.volumes.follow = on; balanceReplanVolumes(); };
 window.balanceToggle = (kind, on) => {
   BALANCE[kind].on = on;
   const pane = $(kind === "containers" ? "#balContainers" : "#balVolumes");

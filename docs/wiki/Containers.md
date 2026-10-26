@@ -866,9 +866,11 @@ of its volumes, a standby host), kept apart from what runs there, or no move of
 it worth a restart, with how far apart the hosts would be after it. Apps too
 small to shift a host are listed together.
 
-The **Volume copies** step follows the container moves: a container moving to
-a host with no copy of its volumes takes one with it, moved from a host it is
-not attached to, so its reads stay local. The job moves one
+The **Volume copies** step can follow the container moves: with **Move a copy
+of each moved container's volumes to its new host** on (the default), a
+container moving to a host with no copy of its volumes takes one with it,
+moved from a host it is not attached to, so its reads stay local. Off, its
+volumes stay where they are. The job moves one
 container at a time, waits until it runs on its new host, and stops if one
 does not come up within ten minutes; cancelling stops after the current one. The review
 holds for ten minutes, and an app edited after it is skipped.
