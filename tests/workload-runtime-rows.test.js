@@ -74,3 +74,8 @@ test("a row's Pod, Container and Init labels never break inside the word", () =>
   // "CONTAINER" wrapped to "CONTAINE / R" on a phone.
   assert.ok(rulesFor(".tree-branch").some(body => /white-space:\s*nowrap/.test(body)));
 });
+
+test("an image with no path starts at the line's start, with no empty path before it", () => {
+  const plain = context.workloadHierarchy({ ...app, pods: [{ ...app.pods[0], containers: [{ ...app.pods[0].containers[0], image: "nginx:1.25" }] }] });
+  assert.match(plain, /<div class="mono dim tree-image" title="nginx:1.25"><span class="tree-image-name">nginx:1.25<\/span><\/div>/);
+});

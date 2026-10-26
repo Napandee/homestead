@@ -85,7 +85,8 @@ const workloadBlocked = w => {
 };
 
 /* What tells one pod of an app from another: the part Kubernetes adds after
-   the ReplicaSet hash (#873). A short name, such as a StatefulSet's, is shown whole. */
+   the ReplicaSet hash (#873). A name of 20 characters or fewer, such as most
+   StatefulSet pods', is shown whole; the title and the wide layout carry the full one. */
 function podShortName(name) {
   const text = String(name || "");
   const last = text.split("-").pop();
@@ -101,7 +102,7 @@ function imageParts(ref) {
 function treeImage(image) {
   if (!image) return `<div class="dim xs tree-image">Image unavailable</div>`;
   const [path, name] = imageParts(image);
-  return `<div class="mono dim tree-image" title="${esc(image)}"><span class="tree-image-path">${esc(path)}</span><span class="tree-image-name">${esc(name)}</span></div>`;
+  return `<div class="mono dim tree-image" title="${esc(image)}">${path ? `<span class="tree-image-path">${esc(path)}</span>` : ""}<span class="tree-image-name">${esc(name)}</span></div>`;
 }
 /* The pod's name: the part that tells it apart, or, in the wide rows layout,
    the whole name where the screen has room for it. */

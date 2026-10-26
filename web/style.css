@@ -354,6 +354,8 @@ h1{margin:2px 0 0;font-size:22px;font-weight:700;letter-spacing:-.02em}
 .workloadtree summary::-webkit-details-marker{display:none}.workloadtree summary::before{content:"›";font-size:17px;line-height:1;transition:transform .2s var(--e)}
 .workloadtree[open] summary::before{transform:rotate(90deg)}.tree-kind,.tree-branch{font-weight:700;color:var(--low)}
 .tree-arrow{color:var(--dim)}.tree-hint{display:none}
+/* A closed pod list is out of the layout, not laid out narrow and hidden. */
+.workloadtree:not([open])>.tree-body{display:none}
 .tree-body{padding:0 9px 7px}.tree-pod{border-top:1px solid rgba(255,255,255,.055);padding:7px 0 1px}
 .tree-pod-head,.tree-container{display:flex;align-items:center;gap:8px;min-width:0;font-size:11.5px}
 /* The pod tree's state chips are compact (#543: the older .pill rule, ported). */
