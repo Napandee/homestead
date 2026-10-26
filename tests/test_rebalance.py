@@ -102,6 +102,29 @@ class PlanTests(unittest.TestCase):
         self.assertNotIn(first, [m["app"] for m in again["moves"]])
         self.assertIn(first, again["apps"], "still listed, unticked")
 
+    def test_a_container_moving_to_a_host_with_no_copy_takes_one_with_it(self):
+        # Balance hosts moves app3 to k1: a copy of its volume follows, from
+        # k3 - not k2, where it is attached until it restarts.
+        c = lopsided()
+        R.bind(c.get, c.send, lambda: True)
+        plan = R.plan(follow=[("lab/app3", "k1")])
+        first = plan["moves"][0]
+        self.assertEqual(("v3", "k3", "k1", "lab/app3"), (first["volume"], first["from"], first["to"], first.get("follows")))
+        self.assertEqual(1, sum(m["volume"] == "v3" for m in plan["moves"]))
+        self.assertIn("lab/app3", plan["apps"])
+        R.reviewed(plan["moves"], [], plan["review_token"])
+
+    def test_a_copy_that_cannot_follow_says_why(self):
+        c = lopsided()
+        c.objects[f"{LH}/replicas"]["items"] = [r for r in c.objects[f"{LH}/replicas"]["items"]
+                                                if r["spec"]["volumeName"] != "v3" or r["spec"]["nodeID"] == "k2"]
+        c.objects[f"{LH}/volumes"]["items"][3]["spec"]["numberOfReplicas"] = 1
+        R.bind(c.get, c.send, lambda: True)
+        plan = R.plan(follow=[("lab/app3", "k1"), ("lab/app2", "k2")])
+        why = {s["claim"]: s["why"] for s in plan["skipped"]}
+        self.assertIn("no copy follows lab/app3 to k1: its only copies are where it is attached now", why["lab/v3"])
+        self.assertNotIn("lab/v2", why, "it has a copy on k2 already")
+
     def test_what_cannot_move_says_why(self):
         c = lopsided()
         c.objects[f"{LH}/volumes"]["items"][0]["status"]["robustness"] = "degraded"

@@ -2329,12 +2329,19 @@ ssh_pwauth: true
       const exclude = (url.searchParams.get("exclude") || "").split(",").filter(Boolean);
       const all = [{ ns: "lab", name: "frigate", id: "lab/frigate", from: "harvester-node2", to: "harvester-node1", cpu_m: 1400, mem_gb: 1.8, near: true },
         { ns: "lab", name: "home-assistant", id: "lab/home-assistant", from: "harvester-node2", to: "harvester-node3", cpu_m: 310, mem_gb: 0.74, near: false }];
+      // A chained pair: what Frigate is kept apart from leaves node1 first.
+      all.unshift({ ns: "lab", name: "mosquitto", id: "lab/mosquitto", from: "harvester-node1", to: "harvester-node3", cpu_m: 40, mem_gb: 0.1, near: false,
+        note: "makes room on harvester-node1 for lab/frigate, which is kept apart from it" });
+      all[1].note = "after lab/mosquitto leaves harvester-node1";
       const moves = all.filter(m => !exclude.includes(m.id)), off = id => exclude.includes(id);
       return { moves, apps: all.map(m => m.id), excluded: exclude, metrics: true, review_token: "demo-crebalance-" + exclude.join("."),
         hosts: [{ name: "harvester-node1", takes: true, cpu_before: 22, cpu_after: off("lab/frigate") ? 22 : 40, mem_before: 44, mem_after: off("lab/frigate") ? 44 : 55 },
           { name: "harvester-node2", takes: true, cpu_before: 78, cpu_after: 78 - (off("lab/frigate") ? 0 : 18) - (off("lab/home-assistant") ? 0 : 4), mem_before: 81, mem_after: 81 - (off("lab/frigate") ? 0 : 11) - (off("lab/home-assistant") ? 0 : 5) },
           { name: "harvester-node3", takes: true, cpu_before: 16, cpu_after: off("lab/home-assistant") ? 16 : 20, mem_before: 35, mem_after: off("lab/home-assistant") ? 35 : 40 }],
-        skipped: [{ id: "lab/plex", why: "it is pinned to its host" }, { id: "lab/immich", why: "it runs more than one copy, which the scheduler spreads itself" }] };
+        skipped: [{ id: "lab/plex", why: "it is pinned to its host" }, { id: "lab/immich", why: "it runs more than one copy, which the scheduler spreads itself" },
+          { id: "lab/zigbee2mqtt", why: "no other host it may run on (harvester-node1: no USB devices present; harvester-node3: no USB devices present)" },
+          { id: "lab/paperless", why: "to harvester-node3 the hosts would be 31 points apart, now 33 - a restart needs 3" },
+          { id: "3 small apps", why: "each uses too little CPU and memory to shift a host: lab/ddns, lab/homepage, lab/uptime" }] };
     },
     "/api/workloads/rebalance": { operation: { id: "demo-crebalance", kind: "container-rebalance", title: "Rebalance 2 containers", status: "running", progress: 0, message: "Starting with the first container", cancellable: true } },
     // Each host as if it failed; harvester-node2 is the issue's own example.
@@ -2403,11 +2410,13 @@ ssh_pwauth: true
       const all = [{ volume: "pvc-demo-frigate", claim: "lab/frigate-recordings", app: "lab/frigate", from: "harvester-node2", to: "harvester-node1", size_gb: 120, attached: true },
         { volume: "pvc-demo-media", claim: "lab/jellyfin-media", app: "lab/jellyfin", from: "harvester-node3", to: "harvester-node1", size_gb: 64, attached: true },
         { volume: "pvc-demo-nextcloud", claim: "lab/nextcloud-data", app: "lab/nextcloud", from: "harvester-node2", to: "harvester-node1", size_gb: 38, attached: false }];
+      // Home Assistant's config follows it to node3 when its move is in the plan.
+      if ((url.searchParams.get("follow") || "").split(",").includes("lab/home-assistant:harvester-node3"))
+        all.unshift({ volume: "pvc-demo-ha", claim: "lab/home-assistant-config", app: "lab/home-assistant", from: "harvester-node1", to: "harvester-node3", size_gb: 2, attached: true, follows: "lab/home-assistant" });
       const moves = all.filter(m => !exclude.includes(m.app)), moved = n => moves.filter(m => m.from === n).reduce((s, m) => s + m.size_gb, 0);
       return { moves, apps: all.map(m => m.app), excluded: exclude, review_token: "demo-rebalance-" + exclude.join("."),
-        hosts: [{ name: "harvester-node1", before_gb: 40, after_gb: 40 + moves.reduce((s, m) => s + m.size_gb, 0), capacity_gb: 900, takes: true },
-          { name: "harvester-node2", before_gb: 410, after_gb: 410 - moved("harvester-node2"), capacity_gb: 900, takes: true },
-          { name: "harvester-node3", before_gb: 380, after_gb: 380 - moved("harvester-node3"), capacity_gb: 900, takes: true }],
+        hosts: [["harvester-node1", 40], ["harvester-node2", 410], ["harvester-node3", 380]].map(([name, gb]) => ({ name, before_gb: gb,
+          after_gb: gb - moved(name) + moves.filter(m => m.to === name).reduce((s, m) => s + m.size_gb, 0), capacity_gb: 900, takes: true })),
         skipped: [{ claim: "lab/nas-backup", why: "its copies are being rebuilt or changed" }] };
     },
     "/api/longhorn/rebalance": { operation: { id: "demo-rebalance", kind: "volume-rebalance", title: "Rebalance 3 volume copies", status: "running", progress: 0, message: "Starting with the first copy", cancellable: true } },

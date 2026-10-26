@@ -164,6 +164,58 @@ class PlanTests(unittest.TestCase):
         frigate = next(m for m in C.plan()["moves"] if m["id"] == "lab/frigate")
         self.assertEqual("k3", frigate["to"], "not k1, where what it is kept apart from runs")
 
+    def coral_only_on_k3(self, c):
+        """Frigate needs hardware only k3 has besides its own host; the rest go anywhere."""
+        C.bind(c.get, lambda dep: {"app": dep["metadata"]["name"]},
+               lambda n, r: (r.get("app") != "frigate" or n["metadata"]["name"] == "k3", ["no Coral"]),
+               c.apply, ("lab", "homestead"), lambda: True)
+        CAPACITY_REVIEW.bind(lambda: b"test-key")
+
+    def add(self, c, name, host, cpu="100m", memory="512Mi"):
+        c.deps[name] = deployment(name); c.pods.append(pod(name, host))
+        c.objects["/apis/apps/v1/replicasets"]["items"].append(replicaset(name))
+        c.objects["/apis/metrics.k8s.io/v1beta1/pods"]["items"].append(
+            {"metadata": {"namespace": "lab", "name": f"{name}-abc-0"}, "containers": [{"usage": {"cpu": cpu, "memory": memory}}]})
+
+    def test_what_keeps_an_app_off_its_only_other_host_moves_first(self):
+        # Seen on a real cluster: Plex kept apart from Frigate, on the one
+        # other host with a Coral, so Frigate never moved off the busy one.
+        c = Cluster(); self.add(c, "dns", "k3")
+        self.place(c, "dns", "podAntiAffinity", "frigate"); self.coral_only_on_k3(c)
+        plan = C.plan()
+        order = [(m["id"], m["to"]) for m in plan["moves"]]
+        self.assertIn(("lab/frigate", "k3"), order, plan)
+        dns = next(m for m in plan["moves"] if m["id"] == "lab/dns")
+        self.assertEqual("k1", dns["to"])
+        self.assertLess(order.index(("lab/dns", "k1")), order.index(("lab/frigate", "k3")), "the one in the way first")
+        self.assertIn("makes room on k3 for lab/frigate", dns["note"])
+        self.assertIn("after lab/dns leaves k3", next(m for m in plan["moves"] if m["id"] == "lab/frigate")["note"])
+
+    def test_a_chain_is_not_made_when_the_one_in_the_way_has_nowhere_to_go(self):
+        c = Cluster(); self.add(c, "dns", "k3")
+        c.deps["dns"] = deployment("dns", pinned="k3")
+        self.place(c, "dns", "podAntiAffinity", "frigate"); self.coral_only_on_k3(c)
+        plan = C.plan()
+        self.assertNotIn("lab/frigate", [m["id"] for m in plan["moves"]])
+        why = {s["id"]: s["why"] for s in plan["skipped"]}
+        self.assertIn("k3: kept apart from lab/dns there", why["lab/frigate"])
+        self.assertIn("k1: no Coral", why["lab/frigate"])
+
+    def test_every_app_that_could_move_but_does_not_says_why(self):
+        c = Cluster(); bind(c, satisfies=lambda n, r: (False, ["no iGPU for /dev/dri"]))
+        plan = C.plan()
+        why = {s["id"]: s["why"] for s in plan["skipped"]}
+        self.assertIn("no other host it may run on (k1: no iGPU for /dev/dri; k3: no iGPU for /dev/dri)", why["lab/frigate"])
+        self.assertIn("lab/ha", why)
+
+    def test_small_apps_are_listed_together_and_near_misses_give_the_numbers(self):
+        c = Cluster(); bind(c)
+        plan = C.plan(["lab/frigate", "lab/ha"])
+        why = {s["id"]: s["why"] for s in plan["skipped"]}
+        self.assertIn("lab/tiny", why["1 small app"])
+        self.assertNotIn("lab/tiny", why)
+        self.assertNotIn("lab/frigate", why, "a vetoed app is the person's choice, not a reason")
+
     def locality(self, mode, copies):
         c = Cluster()
         c.deps["frigate"] = deployment("frigate", claim="frigate-data")

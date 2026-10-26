@@ -888,8 +888,9 @@ TOOLS = [
          "Rebuilds missing copies of a detached volume now.", {"volume": S}, ["volume"],
          run=_post("/api/longhorn/rebuild", {"volume": "volume"})),
     Tool("preview_storage_rebalance", "Preview balancing storage", "read", READ,
-         "Which volume copies would move to even out the disks; exclude: volumes to leave alone.",
-         {"exclude": S}, run=_get("/api/longhorn/rebalance/plan", {"exclude": "exclude"})),
+         "Which volume copies would move to even out the disks; exclude: volumes to leave alone; "
+         "follow: container moves to take a copy of their volumes along, as app:host,app:host.",
+         {"exclude": S, "follow": S}, run=_get("/api/longhorn/rebalance/plan", {"exclude": "exclude", "follow": "follow"})),
     Tool("rebalance_storage", "Balance storage", "storage:manage", CHANGE,
          "Moves volume copies as preview_storage_rebalance planned: settings {moves, review_token, exclude}.",
          {"settings": SETTINGS}, ["settings"], run=_settings_post("/api/longhorn/rebalance")),

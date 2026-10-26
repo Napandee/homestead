@@ -853,7 +853,22 @@ one copy, not pinned to its host, not on host-local storage, and only to hosts
 its hardware and placement rules allow. An app reading its volumes locally
 moves only to a host that holds a copy of them. An operator's review leaves out
 apps only an admin may change, as Move does, and the job checks again before
-each move. The review lists what was left out and why. The job moves one
+each move.
+
+When the one host that would even things out runs something an app is kept
+apart from, that one moves first, to another host it may run on, and the app
+follows into the room it leaves - only when the two moves together are worth
+their restarts. Both rows say so.
+
+**Not moved** gives a reason for every app that could move but does not: no
+other host it may run on (with each host's reason - no Coral, no iGPU, no copy
+of its volumes, a standby host), kept apart from what runs there, or no move of
+it worth a restart, with how far apart the hosts would be after it. Apps too
+small to shift a host are listed together.
+
+The **Volume copies** step follows the container moves: a container moving to
+a host with no copy of its volumes takes one with it, moved from a host it is
+not attached to, so its reads stay local. The job moves one
 container at a time, waits until it runs on its new host, and stops if one
 does not come up within ten minutes; cancelling stops after the current one. The review
 holds for ten minutes, and an app edited after it is skipped.
