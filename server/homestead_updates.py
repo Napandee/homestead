@@ -205,7 +205,8 @@ from homestead_update_registry import (  # noqa: E402,F401
     channel_release, channel_behind,
 )
 from homestead_update_checks import (  # noqa: E402,F401
-    _pod_digest, _matching_pods, _last_known, _check_deployment, SCAN, _SCAN_LOCK, scan_progress, _scan_note,
+    _pod_digest, _matching_pods, _last_known, _names_tag, _check_deployment,
+    SCAN, _SCAN_LOCK, scan_progress, _scan_note,
     scan, _summary, _LATEST, _STARTED, _RUN_LOCK, FRESH_FOR, RETRY_RATE_LIMITED, _fresh_for, invalidate,
     refresh_one, RECONCILE_EVERY, _RECONCILED, reconcile, refresh_soon, homestead_report, report,
 )
