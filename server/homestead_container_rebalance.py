@@ -16,7 +16,10 @@ holds a copy of each. Its placement is kept too: an app set to run
 with others, or one others run with, is not moved alone - the scheduler
 would keep it beside them and the move would never come up - and nothing
 goes to a host it is kept apart from. A host that already holds a copy of its volumes
-is preferred, so its reads stay local.
+is preferred, so its reads stay local. When the one thing in the way is an
+app kept apart from it, that one may move first, to another host it may run
+on, if the two moves together are worth their restarts; and every app that
+could move but does not is listed with why.
 
 Standby hosts (avoid) are moved off first and never moved onto: an app on
 one is there because a main host was away, and a main host with room is a
@@ -319,6 +322,115 @@ def _over(hosts, load, n):
     return max(100 * load[n][0] / hosts[n]["cpu_total"] - cpu, 100 * load[n][1] / hosts[n]["mem_total"] - mem)
 
 
+def _plain(reasons):
+    return ", ".join(reasons) or "it cannot run there"
+
+
+def _blockers(app, n, apps, leaving=()):
+    """What runs on host n now that app is kept apart from - apps that are
+    leaving it do not count."""
+    return [other for other in apps if other is not app and other not in leaving
+            and other.get("at", other["host"]) == n and _kept_apart(app, other)]
+
+
+def _moved_load(load, *steps):
+    after = {n: list(l) for n, l in load.items()}
+    for app, target in steps:
+        at = app.get("at", app["host"])
+        after[at][0] -= app["cpu"]; after[at][1] -= app["mem"]
+        after[target][0] += app["cpu"]; after[target][1] += app["mem"]
+    return after
+
+
+def _take(app, target, load, moves, moved, note=""):
+    at = app.get("at", app["host"])
+    load[at][0] -= app["cpu"]; load[at][1] -= app["mem"]
+    load[target][0] += app["cpu"]; load[target][1] += app["mem"]
+    near = bool(app["near"] and target in app["near"])
+    moves.append({"ns": app["ns"], "name": app["name"], "id": app["id"], "from": app["host"], "to": target,
+                  "cpu_m": round(app["cpu"]), "mem_gb": round(app["mem"] / 1024 ** 3, 2), "near": near,
+                  **({"note": note} if note else {})})
+    moved.add(app["id"])
+    app["at"] = target
+
+
+def _free(app, exclude, moved):
+    return not app["why"] and app["id"] not in exclude and app["id"] not in moved
+
+
+def _chained(apps, load, hosts, avoid, exclude, moved, reachable, now, spread):
+    """Two moves that are worth it together when neither is alone: an app
+    kept apart from the one thing on the host that would even things out
+    (Frigate and Plex, say), and that one moved to another host it may run
+    on first. Only one app in the way - more would be a reshuffle, not a
+    balance."""
+    best = None
+    for app in apps:
+        if not _free(app, exclude, moved) or app.get("at", app["host"]) in avoid:
+            continue
+        for target in reachable.get(app["id"], ()):
+            ahead = _blockers(app, target, apps)
+            if len(ahead) != 1 or not _free(ahead[0], exclude, moved):
+                continue
+            blocker = ahead[0]
+            for room in reachable.get(blocker["id"], ()):
+                # Its new host: not the one it makes room on, nothing there
+                # it is kept apart from once app has left for target.
+                if room == target or _blockers(blocker, room, apps, leaving=(app,)) or (
+                        room == app.get("at", app["host"]) and _kept_apart(blocker, app)):
+                    continue
+                gain = now - spread(_moved_load(load, (blocker, room), (app, target)))
+                near = sum(bool(a["near"] and t in a["near"]) for a, t in ((blocker, room), (app, target)))
+                key = (gain - 2 * (2 - near), near)
+                if gain >= GAIN and (best is None or key > best[0]):
+                    best = (key, app, target, blocker, room)
+    if not best:
+        return []
+    _, app, target, blocker, room = best
+    return [(blocker, room, f"makes room on {target} for {app['id']}, which is kept apart from it"),
+            (app, target, f"after {blocker['id']} leaves {target}")]
+
+
+TINY_CPU, TINY_MEM = 50, 256 * 1024 ** 2   # too small to shift a host's share: listed together
+
+
+def _not_moved(apps, load, hosts, refused, reachable, exclude, moved, now, spread, full):
+    """Why each app that could move does not: no host it may run on, kept
+    apart from what is there, or no move of it worth a restart - with the
+    numbers, so a person can see how close it came."""
+    out, tiny = [], []
+    for app in apps:
+        if not _free(app, exclude, moved):
+            continue
+        here = refused.get(app["id"]) or {}
+        if not reachable.get(app["id"]):
+            hosts_why = "; ".join(f"{n}: {w}" for n, w in sorted(here.items()))
+            out.append({"id": app["id"], "why": f"no other host it may run on ({hosts_why})" if hosts_why
+                        else "there is no other host"})
+            continue
+        apart = {n: _blockers(app, n, apps) for n in reachable[app["id"]]}
+        open_ = [n for n, b in apart.items() if not b]
+        if not open_:
+            parts = [f"{n}: kept apart from {', '.join(o['id'] for o in b[:2])} there" for n, b in sorted(apart.items())]
+            parts += [f"{n}: {w}" for n, w in sorted(here.items())]
+            out.append({"id": app["id"], "why": "; ".join(parts)})
+            continue
+        if app["cpu"] < TINY_CPU and app["mem"] < TINY_MEM:
+            tiny.append(app["id"])
+            continue
+        if full:
+            out.append({"id": app["id"], "why": f"the plan stops at {MAX_MOVES} moves"})
+            continue
+        n, after = min(((n, spread(_moved_load(load, (app, n)))) for n in open_), key=lambda x: x[1])
+        out.append({"id": app["id"], "why": (f"to {n} the hosts would be {after:.0f} points apart, now {now:.0f}"
+                                             if after < now else f"any move makes the hosts more uneven ({now:.0f} points apart now)")
+                    + f" - a restart needs {GAIN:.0f}"})
+    if tiny:
+        out.append({"id": f"{len(tiny)} small app{'s' if len(tiny) != 1 else ''}",
+                    "why": "each uses too little CPU and memory to shift a host: " + ", ".join(sorted(tiny))})
+    return out
+
+
 SPARE_ROOM = 90.0  # how full a main host may get from apps moved off a standby host
 
 
@@ -337,16 +449,25 @@ def plan(exclude=(), avoid=(), role=None):
     # satisfies() reads Homestead's own host summary (status, labels,
     # devices), not the Kubernetes Node.
     summary = {n.get("name"): n for n in (summaries() if summaries else [])}
-    eligible = {}
+    # Where each app could run but for what runs there now: whether
+    # something there is kept apart from it is checked move by move, as
+    # apps move - and a chained move can make room.
+    reachable, refused = {}, {}
     for app in apps:
         if app["why"]:
             continue
         reqs = requirements(app["dep"])
-        eligible[app["id"]] = {n for n, h in hosts.items() if n != app["host"] and h["takes"] and n not in avoid
-                               and satisfies(summary.get(n, h["node"]), reqs)[0]
-                               # Not to a host running something it is kept apart from.
-                               and not any(other["host"] == n and _kept_apart(app, other) for other in apps if other is not app)
-                               and (not _keeps_local(app) or n in app["near"])}
+        refused[app["id"]] = {}
+        for n, h in hosts.items():
+            if n == app["host"]:
+                continue
+            ok, reasons = satisfies(summary.get(n, h["node"]), reqs)
+            why = ("takes no new containers" if not h["takes"] else "is a standby host" if n in avoid
+                   else _plain(reasons) if not ok
+                   else "has no copy of its volumes" if _keeps_local(app) and n not in app["near"] else "")
+            if why:
+                refused[app["id"]][n] = why
+        reachable[app["id"]] = {n for n in hosts if n != app["host"] and n not in refused[app["id"]]}
     moves, moved = [], set()
     while len(moves) < MAX_MOVES:
         best = None
@@ -355,11 +476,12 @@ def plan(exclude=(), avoid=(), role=None):
         for busiest in sorted(load, key=lambda n: (n in avoid, _over(main, {k: load[k] for k in main}, n) if n in main else 0),
                               reverse=True):
             for app in apps:
-                if app["host"] != busiest or app["why"] or app["id"] in exclude or app["id"] in moved:
+                if app.get("at", app["host"]) != busiest or not _free(app, exclude, moved):
                     continue
-                for target in eligible.get(app["id"], ()):
-                    after = {**load, busiest: [load[busiest][0] - app["cpu"], load[busiest][1] - app["mem"]],
-                             target: [load[target][0] + app["cpu"], load[target][1] + app["mem"]]}
+                for target in reachable.get(app["id"], ()):
+                    if _blockers(app, target, apps):
+                        continue
+                    after = _moved_load(load, (app, target))
                     if busiest in avoid:
                         # Off a standby host, any move that leaves the new
                         # one room is worth it; the most room left first.
@@ -376,15 +498,18 @@ def plan(exclude=(), avoid=(), role=None):
             if best:
                 break
         if not best:
-            break
-        _, app, target, near = best
-        load[app["host"]][0] -= app["cpu"]; load[app["host"]][1] -= app["mem"]
-        load[target][0] += app["cpu"]; load[target][1] += app["mem"]
-        moves.append({"ns": app["ns"], "name": app["name"], "id": app["id"], "from": app["host"], "to": target,
-                      "cpu_m": round(app["cpu"]), "mem_gb": round(app["mem"] / 1024 ** 3, 2), "near": near})
-        moved.add(app["id"])
+            chain = _chained(apps, load, hosts, avoid, exclude, moved, reachable, now, main_spread)                 if len(moves) + 2 <= MAX_MOVES else []
+            if not chain:
+                break
+            # The one in the way first, to a host it may run on; then the app
+            # into the room it leaves.
+            for app, target, note in chain:
+                _take(app, target, load, moves, moved, note)
+            continue
+        _, app, target, _near = best
+        _take(app, target, load, moves, moved)
     shown = {m["id"] for m in moves} | (exclude & {a["id"] for a in apps})
-    movable = [a for a in apps if not a["why"] and a["id"] not in exclude and eligible.get(a["id"])]
+    movable = [a for a in apps if not a["why"] and a["id"] not in exclude and reachable.get(a["id"])]
     # Why nothing moves, when nothing does (#381).
     quiet = ("" if moves else "even" if spread_before < GAIN * 2 else "nothing-movable" if not movable else "small")
     token = review_token(moves, exclude)
@@ -395,7 +520,9 @@ def plan(exclude=(), avoid=(), role=None):
                        "mem_after": round(100 * load[n][1] / hosts[n]["mem_total"])} for n in sorted(hosts)],
             "moves": moves, "apps": sorted(shown), "excluded": sorted(exclude), "quiet": quiet,
             "spread_before": round(spread_before, 1), "spread_after": round(main_spread(load), 1) if hosts else 0,
-            "skipped": [{"id": a["id"], "why": a["why"]} for a in apps if a["why"]],
+            "skipped": [{"id": a["id"], "why": a["why"]} for a in apps if a["why"]]
+                       + _not_moved(apps, load, hosts, refused, reachable, exclude, moved, main_spread(load) if hosts else 0,
+                                    main_spread, len(moves) >= MAX_MOVES),
             "metrics": all(h["metrics"] for h in hosts.values()), "review_token": token}
 
 
@@ -562,7 +689,8 @@ def _summary(ref):
     order = {"failed": 0, "not reached": 1, "skipped": 2, "moved": 3}
     words = {"moved": "Moved {id} to {to}", "skipped": "Skipped {id}: {detail}", "failed": "{id} failed: {detail}",
              "not reached": "{id} not reached"}
-    named = [words[r["result"]].format(**r) for r in sorted(results, key=lambda r: order[r["result"]])]
+    named = [words[r["result"]].format(**r) + (f" ({r['detail']})" if r["result"] == "moved" and r.get("detail") else "")
+             for r in sorted(results, key=lambda r: order[r["result"]])]
     return "; ".join(named[:6]) + (f"; and {len(named) - 6} more" if len(named) > 6 else "")
 
 
@@ -605,6 +733,19 @@ def _running_on(ns, name, keep=None):
     hosts = {(p.get("spec") or {}).get("nodeName") for p in _items(f"/api/v1/namespaces/{ns}/pods?labelSelector={selector}")
              if (p.get("status") or {}).get("phase") == "Running" and not (p.get("metadata") or {}).get("deletionTimestamp")}
     return settled, hosts
+
+
+def _pull_first(dep, node):
+    """Start pulling the app's images the host lacks; ([pulls], [images]).
+    A pull that cannot start is not a reason to stop: it moves at once, as
+    it always did."""
+    import homestead_host_move as HOST_MOVE
+    import homestead_image_cache as IMAGES
+    try:
+        need = HOST_MOVE.missing(dep, node) if dep else []
+        return [IMAGES.prepull(image, [node])["daemonset"] for image in need], need
+    except Exception:
+        return [], []
 
 
 def status(item):
@@ -653,6 +794,14 @@ def status(item):
                                                   if (b.get("metadata") or {}).get("namespace") == move["ns"]])
         if budget:
             return skip(budget)
+        # Its image onto the new host first: a host already holding it
+        # scores for that, and can outweigh the preferred placement (#880).
+        if ref.get("pulled") != i:
+            pulls, need = _pull_first(dep, move["to"])
+            ref["pulled"] = i
+            if pulls:
+                ref.update(stage="pulling", pulls=pulls, since=now)
+                return "running", progress, f"Pulling {', '.join(need)} onto {move['to']} first, so {move['id']} lands there"
         # The job runs with no request behind it: asked again for whoever
         # started it, since the app may have changed since the review, and
         # the move written as them, so the fence on Kubernetes writes checks
@@ -674,16 +823,32 @@ def status(item):
             return "running", progress, (f"{i + 1} of {len(moves)}: " + (f"moved {', '.join(moved)}; " if moved else "")
                                          + f"moving {move['id']} to {move['to']}")
         return "running", progress, f"Moving {move['id']} to {move['to']} ({i + 1} of {len(moves)}); it restarts there"
+    if stage == "pulling":
+        import homestead_host_move as HOST_MOVE
+        pulls = ref.get("pulls") or []
+        if not HOST_MOVE._pulled(pulls) and now - ref.get("since", now) < HOST_MOVE.PULL_WAIT:
+            return "running", progress, f"Pulling {move['id']}'s image onto {move['to']} first, so it lands there"
+        HOST_MOVE._clear(pulls)
+        ref.pop("pulls", None)
+        # The checks again, then the move: the pull took a while.
+        ref["stage"] = "move"
+        return "running", progress, f"Image on {move['to']}; moving {move['id']}"
     if stage == "starting":
         settled, hosts = _running_on(move["ns"], move["name"])
         if settled and hosts and move["from"] not in hosts:
-            _note(ref, move, "moved")
+            # Where it landed, when not where it was sent.
+            _note(ref, move, "moved", "" if move["to"] in hosts else f"it landed on {', '.join(sorted(hosts))}, not {move['to']}")
             ref.update(index=i + 1, stage="move", moved=done + 1)
             return "running", int(100 * (i + 1) / len(moves)), f"{move['id']} runs on {', '.join(sorted(hosts))}"
         if now - ref.get("started", now) > 600:
             # Stop rather than restart more: one that did not come up is looked at first.
             if ref.get("stop_on_failure"):
                 return _halt(ref, i, move, f"did not start on {move['to']} within 10 minutes")
+            if settled and hosts == {move["from"]}:
+                where = f"{move['id']} restarted on {move['from']}, not {move['to']}"
+                if ref.get("stop_on_failure"):
+                    return _halt(ref, i, move, where.split(" ", 1)[1])
+                return "failed", progress, f"{where}; the rest were not moved. Moved {done} before it"
             return "failed", progress, (f"{move['id']} did not start on {move['to']} within 10 minutes; the rest were not moved. "
                                         f"Moved {done} before it. Check its events in Containers")
         return "running", progress, f"Waiting for {move['id']} to start on {move['to']} ({i + 1} of {len(moves)})"
