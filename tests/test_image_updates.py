@@ -404,6 +404,13 @@ class ImageUpdateTests(unittest.TestCase):
         self.assertEqual("valkey/valkey:9-alpine", image["candidate"])
         self.assertEqual((old, new), (image["current_digest"], image["remote_digest"]))
 
+    def test_which_pinned_references_name_a_tag(self):
+        digest = "@sha256:" + "a" * 64
+        cases = {"postgres:16-alpine": True, "postgres": False, "img:latest": True,
+                 "registry.example.com:5000/img": False, "registry.example.com:5000/img:9-alpine": True}
+        for ref, named in cases.items():
+            self.assertIs(named, updates._names_tag(ref + digest), ref)
+
     def test_a_pinned_release_tag_is_checked_as_before(self):
         old, new = "sha256:" + "a" * 64, "sha256:" + "b" * 64
         image, _ = self._pinned("grafana/alloy:v1.21.1@" + old, ["v1.21.1", "v1.22.0"], now=new)
