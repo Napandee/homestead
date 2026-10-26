@@ -160,3 +160,59 @@ test("on a phone the app or host stays apart from the sentence, and the range fi
   assert.match(out.html, /game restarted: Crashed<span class="dim xs"> · apps\/game<\/span>/);
   assert.match(out.html, />Since last visit</);
 });
+
+// #871: the page refreshes itself; a filter chosen on it lasts until the page is opened again.
+const rows = html => (html.match(/<tr class="tl-row/g) || []).length;
+
+test("a refresh keeps the kind, app and host chosen", async () => {
+  const { ctx, out } = setup();
+  ctx.NAV_TOKEN = 1;
+  await ctx.viewTimeline();
+  ctx.timelineFilter("kind", "restart");
+  ctx.timelineFilter("app", "apps/game");
+  assert.equal(rows(out.html), 2);
+  await ctx.viewTimeline();                  // the refresh loop calls the view again, same page
+  assert.equal(rows(out.html), 2);
+  assert.match(out.html, /<option value="apps\/game" selected>/);
+});
+
+test("opening the page again starts with every event", async () => {
+  const { ctx, out } = setup();
+  ctx.NAV_TOKEN = 1;
+  await ctx.viewTimeline();
+  ctx.timelineFilter("kind", "restart");
+  ctx.NAV_TOKEN = 2;                         // go() counts every navigation
+  await ctx.viewTimeline();
+  assert.equal(rows(out.html), 7);
+});
+
+test("a range change keeps the filter, and a choice the new window lacks stays shown", async () => {
+  const { ctx, out } = setup();
+  ctx.NAV_TOKEN = 1;
+  await ctx.viewTimeline();
+  ctx.timelineFilter("host", "node-2");
+  await ctx.timelineRange("week");           // this window answers with no entries
+  assert.match(out.html, /<option value="node-2" selected>/);
+  assert.equal(rows(out.html), 0);
+});
+
+test("a menu with nothing to choose besides All is not shown", async () => {
+  const noHosts = { ...DATA, entries: DATA.entries.filter(e => !e.host), counts: { ...DATA.counts, host: 0 } };
+  const { ctx, out } = setup(noHosts);
+  await ctx.viewTimeline();
+  assert.doesNotMatch(out.html, /aria-label="Host"/);
+  assert.match(out.html, /aria-label="App"/);
+  const bare = { ...DATA, entries: DATA.entries.map(e => ({ ...e, app: "", host: "" })) };
+  const second = setup(bare);
+  await second.ctx.viewTimeline();
+  assert.doesNotMatch(second.out.html, /aria-label="(?:App|Host)"/);
+});
+
+test("an event with an app and a host shows both", async () => {
+  const withHost = { ...DATA, entries: [entry(100, "restart", "warn", "game restarted: Crashed", { app: "apps/game", host: "node-1" })] };
+  const { ctx, out } = setup(withHost);
+  await ctx.viewTimeline();
+  assert.match(out.html, /game restarted: Crashed<span class="dim xs"> · apps\/game · node-1<\/span>/);
+  ctx.timelineFilter("host", "node-1");
+  assert.equal(rows(out.html), 1);
+});

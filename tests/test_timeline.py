@@ -248,6 +248,22 @@ class FeedTests(DataDir):
         host = [e for e in self.feed()["entries"] if e["kind"] == "host"]
         self.assertEqual([T0 - 3600], [e["at"] for e in host])
 
+    # #871: the Host filter had nothing but maintenance to offer.
+    def test_restarts_carry_the_host_they_happened_on(self):
+        self.src.restarts[0]["node"] = "node-1"
+        self.src.restarts[2]["node"] = "node-3"
+        restarts = {e["app"]: e for e in self.feed()["entries"] if e["kind"] == "restart"}
+        self.assertEqual(("node-1", "node-3"), (restarts["apps/game"]["host"], restarts["apps/db"]["host"]))
+        self.assertEqual("", restarts["apps/wiki"]["host"], "a record with no host (a rollout, or an older one) has none")
+
+    def test_an_alert_about_a_host_carries_it(self):
+        self.src.alerts.append({"id": 4, "at": T0 - 70, "phase": "raised", "key": "hostos:node-3:root",
+                                "category": "degraded", "severity": "degraded", "title": "Root filesystem is 92% full on node-3",
+                                "href": "/nodes?node=node-3&section=hostos"})
+        alerts = {e["text"]: e["host"] for e in self.feed()["entries"] if e["kind"] == "alert"}
+        self.assertEqual("node-3", alerts["Root filesystem is 92% full on node-3"])
+        self.assertEqual("", alerts["Scheduled job backup failed"], "an alert about an app names no host")
+
     def test_an_unreadable_alerts_or_history_file_is_named_not_empty(self):
         import homestead_alerts as ALERTS
         import homestead_history as HISTORY
