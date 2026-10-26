@@ -174,9 +174,9 @@ window.alertHookConfigure = () => {
       h.webhook ? UI.button("Turn off", "alertHookOff()", { kind: "danger" }) : ""));
 };
 
-const alertHookPost = (path, body) => api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+const alertHookInit = body => ({ method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 const alertHookSend = async body => {
-  try { const r = await alertHookPost("/api/alerts/webhook", body); toast(r.detail || "Saved", "ok"); closeModal(); setTimeout(alertHookPaint, 300); }
+  try { const r = await api("/api/alerts/webhook", alertHookInit(body)); toast(r.detail || "Saved", "ok"); closeModal(); setTimeout(alertHookPaint, 300); }
   catch (e) { toast(e.message, "bad"); }
 };
 window.alertHookSave = () => {
@@ -190,7 +190,7 @@ window.alertHookTest = async () => {
   const webhook = ($("#ah_url")?.value || "").trim();
   if (!webhook) return toast("Type the webhook address first", "bad");
   try {
-    const r = await alertHookPost("/api/alerts/webhook/test", { webhook, format: $("#ah_format")?.value || "generic" });
+    const r = await api("/api/alerts/webhook/test", alertHookInit({ webhook, format: $("#ah_format")?.value || "generic" }));
     toast(r.detail, r.ok ? "ok" : "bad");
   } catch (e) { toast(e.message, "bad"); }
 };

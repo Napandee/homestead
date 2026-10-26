@@ -187,11 +187,14 @@ as ntfy or Gotify: **Settings → Connections → Alert webhook** (admins only).
 It is off until set, so nothing changes for anyone who does not set it.
 
 Each alert is sent once, as it is raised, worsens or clears, under the same
-trigger rules as push: an unchanged condition is not sent again. **Send**
-chooses the alerts: critical only, warnings and critical (the default), or
-everything, information too. Device tests are never sent. When more than 10
-alerts arrive at once, the first 10 are sent and one more call says how many
-were left out.
+trigger rules as push: an unchanged condition is not sent again. Unlike push,
+it has no categories to choose and no acknowledgement: an alert someone
+acknowledged in Homestead is still sent. **Send** chooses the alerts: critical
+only, warnings and critical (the default), or everything, information too.
+An alert that was sent is always followed by its clear, even if it eased below
+that level first. Device tests are never sent. When more than 10 alerts arrive
+at once, the first 10 are sent and one more call says how many were left out.
+Calls go out one after another, in order, with `User-Agent: Homestead alerts`.
 
 | Format | What is sent |
 | --- | --- |

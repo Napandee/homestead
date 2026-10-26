@@ -35,9 +35,15 @@ class Store(FakeCase):
         patch = mock.patch.object(ALERTS, "DATA_DIR", folder.name)
         patch.start()
         self.addCleanup(patch.stop)
-        leader = mock.patch.object(H.LEADER_STATE, "put")
-        leader.start()
-        self.addCleanup(leader.stop)
+        # The leader's shared state, in memory: what was sent, and the last call.
+        self.shared = {}
+        for name, fake in (("put", lambda section, value, **kw: self.shared.__setitem__(section, value)),
+                           ("get", lambda section, *a, **kw: (self.shared.get(section), 0))):
+            leader = mock.patch.object(H.LEADER_STATE, name, side_effect=fake)
+            leader.start()
+            self.addCleanup(leader.stop)
+        H._last.clear()
+        self.addCleanup(H._last.clear)
         O._tests.clear()
         self.addCleanup(O._tests.clear)
 
@@ -113,8 +119,12 @@ class FormatTests(Store):
     def test_outage_calls_are_unchanged(self):
         body = O.payload({"kind": "app", "ns": "lab", "name": "frigate"}, "down", {"state": "down"}, now=10)
         _, data, headers = O.request_for("https://ntfy.example.com/x", body, "ntfy")
-        self.assertEqual((b"frigate is down", "Homestead", "high", "rotating_light"),
-                         (data, headers["Title"], headers["Priority"], headers["Tags"]))
+        self.assertEqual((b"frigate is down", "Homestead", "high", "rotating_light", "Homestead outage actions"),
+                         (data, headers["Title"], headers["Priority"], headers["Tags"], headers["User-Agent"]))
+        _, data, _ = O.request_for("https://gotify.example.com/message", body, "gotify")
+        self.assertEqual(b'{"title": "Homestead", "message": "frigate is down", "priority": 8}', data)
+        _, data, _ = O.request_for("https://h.example.com/x", body, "generic")
+        self.assertEqual(json.dumps(body).encode(), data)
 
 
 class WhatIsSentTests(Store):
@@ -152,6 +162,67 @@ class WhatIsSentTests(Store):
         self.assertNotIn(SECRET, shown)
         self.assertEqual("https://ntfy.example.com/(hidden)", H.public()["webhook"])
         self.assertFalse(H.public()["last"]["ok"])
+
+    def test_an_alert_sent_is_cleared_even_when_it_fell_below_the_level_first(self):
+        fake = self.fake()
+        self.set(webhook=self.named(fake, "/t"), format="ntfy", min_severity="critical")
+        self.deliver([entry("critical", id=1, title="crit")])
+        # It eased to a warning (no event), then cleared at that severity.
+        self.deliver([entry("degraded", "resolved", id=2, title="cleared")])
+        self.assertEqual(["crit", "cleared"], [g["headers"]["Title"] for g in fake.got])
+
+    def test_a_clear_of_an_alert_never_sent_is_not_sent(self):
+        fake = self.fake()
+        self.set(webhook=self.named(fake, "/t"), format="ntfy", min_severity="critical")
+        self.deliver([entry("degraded", id=1, title="warn")])
+        self.deliver([entry("degraded", "resolved", id=2, title="cleared")])
+        self.assertEqual([], fake.got)
+
+    def test_rounds_go_out_one_at_a_time_in_order(self):
+        import threading
+        import time as clock
+        self.set(webhook="https://ntfy.example.com/t", format="ntfy")
+        seen, inside, overlap = [], [0], []
+
+        def slow(url, data, fmt, lan, shown):
+            inside[0] += 1
+            overlap.append(inside[0] > 1)
+            clock.sleep(0.05)
+            seen.append(shown["title"])
+            inside[0] -= 1
+        with mock.patch.object(H.OUTAGE, "post", side_effect=slow):
+            # As the alert loop sends them: on Homestead's own thread, not at once.
+            H.deliver([entry(id=1, title="raised", key="k")])
+            H.deliver([entry(id=2, phase="resolved", title="cleared", key="k")])
+            done = threading.Event()
+            H._queue.put(done.set)
+            self.assertTrue(done.wait(5))
+        self.assertEqual(["raised", "cleared"], seen)
+        self.assertFalse(any(overlap))
+
+    def test_a_store_that_cannot_be_read_can_still_be_turned_off(self):
+        Path(H._path()).write_text("not json")
+        H.save({"webhook": ""})
+        self.assertFalse(Path(H._path()).exists())
+
+    def test_a_burst_of_clears_says_so(self):
+        fake = self.fake()
+        self.set(webhook=self.named(fake, "/t"), format="ntfy")
+        self.deliver([entry(id=i, title=f"a{i}", key=f"k{i}") for i in range(H.MAX_PER_ROUND + 3)])
+        fake.got.clear()
+        self.deliver([entry(id=100 + i, phase="resolved", title=f"c{i}", key=f"k{i}") for i in range(H.MAX_PER_ROUND + 3)])
+        self.assertIn(b"3 more alerts cleared", fake.got[-1]["body"])
+        self.assertEqual("white_check_mark", fake.got[-1]["headers"]["Tags"])
+
+    def test_alert_calls_say_they_come_from_homestead_alerts(self):
+        fake = self.fake()
+        self.set(webhook=self.named(fake, "/t"), format="ntfy")
+        self.deliver([entry()])
+        self.assertEqual("Homestead alerts", fake.got[0]["headers"]["User-Agent"])
+
+    def test_the_housekeeping_list_of_stores_names_it(self):
+        import homestead_housekeeping as HK
+        self.assertTrue(any("alert-webhook.json" in files for _, files, *_ in HK.STORES))
 
     def test_the_store_is_readable_only_by_homestead(self):
         self.set(webhook="https://ntfy.example.com/t")

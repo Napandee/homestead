@@ -303,8 +303,9 @@ def _header(text):
 def request_for(url, body, fmt="generic", notice=None):
     """(url, data, headers) for one call in the webhook's format. notice -
     title, message, level (LEVELS) and tags - is what ntfy and Gotify show;
-    an outage's is Homestead, its sentence, high when urgent, and its tag."""
-    headers = {"User-Agent": "Homestead outage actions"}
+    an outage's is Homestead, its sentence, high when urgent, and its tag.
+    Its agent, if any, is the User-Agent (alerts say so; outages as before)."""
+    headers = {"User-Agent": (notice or {}).get("agent") or "Homestead outage actions"}
     urgent = body.get("event") in URGENT
     notice = notice or {"title": "Homestead", "message": body.get("message") or "",
                         "level": "high" if urgent else "default", "tags": NTFY_TAGS.get(body.get("event"), "house")}
