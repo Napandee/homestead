@@ -865,16 +865,33 @@
       const joining = body.target_mode === "existing";
       const workloadName = body.workload_name || body.name;
       const containerName = body.container_name || body.name;
+      // Placement chosen in Deploy (#844), as the server writes it: a preferred
+      // host, and a pod (anti-)affinity term for each rule.
+      const place = joining ? {} : body.placement || {}, host = joining ? "" : body.node || "";
+      const term = (mode, app) => {
+        const rule = { labelSelector: { matchLabels: { app: app.name } }, namespaces: [app.ns || body.namespace], topologyKey: "kubernetes.io/hostname" };
+        return mode === "require" ? ["requiredDuringSchedulingIgnoredDuringExecution", rule] : ["preferredDuringSchedulingIgnoredDuringExecution", { weight: 100, podAffinityTerm: rule }];
+      };
+      const affinity = {};
+      const add = (kind, mode, app) => { const [slot, item] = term(mode, app); ((affinity[kind] ||= {})[slot] ||= []).push(item); };
+      if (place.spread) add("podAntiAffinity", place.spread, { name: workloadName });
+      (place.with || []).forEach(row => add("podAffinity", row.mode, row));
+      (place.apart || []).forEach(row => add("podAntiAffinity", row.mode, row));
+      if (host) affinity.nodeAffinity = { preferredDuringSchedulingIgnoredDuringExecution: [{ weight: 100,
+        preference: { matchExpressions: [{ key: "kubernetes.io/hostname", operator: "In", values: [host] }] } }] };
+      const candidate = name => ({ name, eligible: true, metrics_available: true, used_gb: 6,
+        projected_gb: 6.5, capacity_gb: 16, projected_percent: 40.6, reservations_known: true, reserved_gb: 4, request_slots: 1 });
       return { deployment: { apiVersion: "apps/v1", kind: "Deployment",
           metadata: { name: joining ? body.target_workload : workloadName, namespace: body.namespace },
           spec: { template: { spec: { containers: [{ name: containerName, image: body.image }],
+            ...(Object.keys(affinity).length ? { affinity } : {}),
             ...(!joining && ["critical", "low"].includes(body.priority) ? { priorityClassName: "homestead-" + body.priority } : {}) } } } },
         service: null, capacity: { additional: 1, pod_request_gb: 0.25, pod_memory_gb: 0.5,
           pod_cpu_request_percent: 10, blocked: false, requires_confirmation: joining,
           ...(joining ? { rollout: { strategy: "Recreate", replicas: 1, ownership_known: true, owned_pods: ["demo-pod"], release_request_gb: 0.25 } } : {}),
+          ...(host ? { placement: { pinned: null, preferred: host, resident: null } } : {}),
           warnings: joining ? ["Recreate stops old pods before replacements start; every container will be unavailable during the restart"] : [],
-          candidates: [{ name: "harvester-node1", eligible: true, metrics_available: true, used_gb: 6,
-            projected_gb: 6.5, capacity_gb: 16, projected_percent: 40.6, reservations_known: true, reserved_gb: 4, request_slots: 1 }] },
+          candidates: [...new Set(["harvester-node1", ...(host ? [host] : [])])].map(candidate) },
         capacity_token: "demo-review", impact: { mode: joining ? "existing" : "new", workload: joining ? body.target_workload : workloadName,
           message: joining ? "Saving updates the Deployment template and restarts every container in its pods." : "Creates a new independently managed Deployment." } };
     },
