@@ -301,6 +301,8 @@
   // Flux applies paperless from git (#734): its edit, move and rename reviews say so.
   const demoGitops = body => body.ns === "lab" && body.name === "paperless"
     ? { by: "Flux", source: "Kustomization flux-system/apps", detected: true } : {};
+  // Reconcile now (#742): when each Flux object was last asked to apply.
+  const demoReconciled = {};
   // The edit as YAML for git (#735): the demo shows the containers' image and memory as sent.
   const demoEditYaml = body => body.workload_name && body.workload_name !== body.name ? "" : [
     "apiVersion: apps/v1", "kind: Deployment", "metadata:", `  name: ${body.name}`, `  namespace: ${body.ns || "lab"}`,
@@ -2918,7 +2920,10 @@ ssh_pwauth: true
     // Is Flux applying it (#742): one Kustomization failing, so the Cluster page and paperless's details show it.
     "/api/gitops": () => {
       const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
-      return { summary: "2 Kustomizations, 1 HelmRelease: 1 not ready",
+      // Reconcile now: the demo's Flux takes a request at once; apps still fails, as its Secret is still missing.
+      const asked = row => demoReconciled[row.id] ? { ...row, requested: demoReconciled[row.id], handled: demoReconciled[row.id], tried: demoReconciled[row.id] }
+        : { ...row, requested: "", handled: "" };
+      const report = { summary: "2 Kustomizations, 1 HelmRelease: 1 not ready",
         apps: { "lab/paperless": "Kustomization flux-system/apps", "monitoring/loki": "Kustomization flux-system/monitoring" },
         objects: [
           { id: "Kustomization flux-system/apps", kind: "Kustomization", namespace: "flux-system", name: "apps", ready: false, suspended: false,
@@ -2928,6 +2933,15 @@ ssh_pwauth: true
             revision: "main@4f1c2d9", tried: ago(6), since: ago(2000), interval: "10m", message: "Applied revision: main@sha1:4f1c2d9" },
           { id: "HelmRelease dev/actions-runner", kind: "HelmRelease", namespace: "dev", name: "actions-runner", ready: true, suspended: false,
             revision: "runner-chart 0.15.0", tried: ago(40), since: ago(9000), interval: "30m", message: "Helm upgrade succeeded" }] };
+      return { ...report, objects: report.objects.map(asked) };
+    },
+    "/api/gitops/reconcile": (url, init) => {
+      const body = JSON.parse(init?.body || "{}");
+      const id = { "lab/paperless": "Kustomization flux-system/apps", "monitoring/loki": "Kustomization flux-system/monitoring" }[`${body.ns}/${body.name}`];
+      if (!id) return new Response(JSON.stringify({ error: `Flux does not apply ${body.ns}/${body.name}` }),
+        { status: 400, headers: { "Content-Type": "application/json" } });
+      demoReconciled[id] = new Date().toISOString();
+      return { ok: true, id, requested: demoReconciled[id] };
     },
     "/api/edit/preview": (url, init) => {
       const body = JSON.parse(init?.body || "{}");

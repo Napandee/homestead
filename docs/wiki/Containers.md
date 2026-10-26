@@ -179,9 +179,18 @@ once a minute:
   and cleared when it is again. Flux's message is on the Cluster page, not in
   the alert, since it can name repositories and Secrets. A suspended one is shown
   as suspended and never alerts: someone paused it on purpose.
+- **Reconcile now** (admins, in the app's ⋯ menu) asks Flux to apply what git
+  has straight away, instead of at its next interval: it sets
+  `reconcile.fluxcd.io/requestedAt` on the Kustomization or HelmRelease, as
+  `flux reconcile` does. The review names every app that one applies, since
+  Flux applies them all. The dialog then follows Flux until it has taken the
+  request and shows the result; the app's details say "waiting for Flux" until
+  then. It is not offered for a suspended one, and the audit log
+  (`audit.jsonl`) records who asked.
 
-This only reads; Homestead does not reconcile, suspend or change Flux objects.
-Argo CD's Applications are not read.
+Apart from Reconcile now, this only reads: Homestead does not suspend, resume
+or change Flux objects. Argo CD's Applications are not read.
+
 
 #### Copy as YAML for git
 
