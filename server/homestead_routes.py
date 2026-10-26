@@ -67,6 +67,7 @@ MODULES = (
     "homestead_allocation_probe",
     "homestead_api_keys",
     "homestead_api_v1",
+    "homestead_app_copies",
     "homestead_app_settings",
     "homestead_audit",
     "homestead_auth",

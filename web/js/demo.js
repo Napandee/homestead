@@ -2556,6 +2556,24 @@ ssh_pwauth: true
           reason: "homestead-data is on longhorn-r2, a migratable class: Longhorn gives it a VM-disk volume that only one node can mount, so a copy on a second node would never start",
           candidates: ["longhorn"], classes: [{ name: "longhorn", shareable: true }] },
         data_copies: demoDataCopies() },
+    // Match copies to hosts (#841): the demo has two hosts, so nothing is
+    // offered unless a check asks for the one-host ("lower") or "raise" offer.
+    "/api/longhorn/one-host-copies": (url, init) => {
+      const offer = window.__demoOneHostCopies;
+      if (init?.method === "POST") {
+        const { action, volumes = [] } = JSON.parse(init.body || "{}");
+        window.__demoOneHostCopies = "";
+        return { ok: true, changed: volumes.map(v => v.volume), message: action === "raise"
+          ? `${volumes.length} volumes have copies back; Longhorn is making them`
+          : `${volumes.length} volumes now keep one copy, as this host can hold. The count each asked for is kept on it` };
+      }
+      const rows = [{ volume: "pvc-demo-frigate", claim: "frigate-config", namespace: "lab", app: "lab/frigate" },
+        { volume: "pvc-demo-paperless", claim: "paperless-data", namespace: "lab", app: "lab/paperless" },
+        { volume: "pvc-demo-immich", claim: "immich-library-with-a-long-descriptive-name", namespace: "media", app: "media/immich" }];
+      if (offer === "lower") return { state: "lower", hosts: 1, volumes: rows.map(r => ({ ...r, from: 3, to: 1 })) };
+      if (offer === "raise") return { state: "raise", hosts: 2, volumes: rows.map(r => ({ ...r, from: 1, to: 2 })) };
+      return { state: "none", hosts: 2, volumes: [] };
+    },
     "/api/self/data/two-copies": () => {
       const created = !window.__demoTwoCopiesMade;
       window.__demoTwoCopiesMade = true;
