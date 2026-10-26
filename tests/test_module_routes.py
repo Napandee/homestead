@@ -142,6 +142,67 @@ class DeclaredRoutes(unittest.TestCase):
         self.assertIsNone(ROUTES.find("GET", "/api/test/echo"))
 
 
+def _bound_names(target):
+    """The names an assignment target binds, through tuple and list unpacking."""
+    if isinstance(target, ast.Name):
+        return [target.id]
+    if isinstance(target, ast.Starred):
+        return _bound_names(target.value)
+    if isinstance(target, (ast.Tuple, ast.List)):
+        return [name for element in target.elts for name in _bound_names(element)]
+    return []
+
+
+def declares_routes(source):
+    """Whether a module binds ROUTES at module level, as homestead_routes.table()
+    finds it through getattr: assigned (ROUTES = ..., ROUTES: ... = ..., unpacked)
+    or imported, directly or inside a top-level if, try or with. A def or class
+    body does not count."""
+    pending = list(SS.tree(source).body)
+    while pending:
+        node = pending.pop()
+        if isinstance(node, ast.Assign):
+            names = [name for target in node.targets for name in _bound_names(target)]
+        elif isinstance(node, ast.AnnAssign):
+            names = _bound_names(node.target)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            names = [alias.asname or alias.name for alias in node.names]
+        else:
+            names = []
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                for field in ("body", "orelse", "finalbody", "handlers"):
+                    pending += getattr(node, field, None) or []
+        if "ROUTES" in names:
+            return True
+    return False
+
+
+class ModuleList(unittest.TestCase):
+    """table() reads only the modules in MODULES (#870): a module with ROUTES
+    left out of it loads without error, and its routes answer 404."""
+
+    def test_every_module_with_routes_is_listed(self):
+        unlisted = [path.stem for path in SS.server_modules() if declares_routes(path) and path.stem not in ROUTES.MODULES]
+        self.assertEqual([], unlisted, "these declare ROUTES but are not in homestead_routes.MODULES, so their routes answer 404")
+
+    def test_every_listed_module_exists(self):
+        # A module may be listed without ROUTES (homestead_audit is, to register
+        # its after-request hook), but every listed name is a module here.
+        missing = [name for name in ROUTES.MODULES if not (SS.SERVER / f"{name}.py").is_file()]
+        self.assertEqual([], missing, "listed in homestead_routes.MODULES, but there is no server/<name>.py")
+
+    def test_only_a_top_level_routes_assignment_counts(self):
+        for source, declares in (("ROUTES = {}", True), ("ROUTES: dict = {}", True),
+                                 ("def f():\n    ROUTES = {}", False), ("# ROUTES = {}", False),
+                                 ("ROUTES_V1 = {}", False), ("x = ROUTES", False),
+                                 ("if X:\n    ROUTES = {}", True), ("try:\n    pass\nexcept E:\n    ROUTES = {}", True),
+                                 ("ROUTES, X = {}, 1", True), ("from x import ROUTES", True),
+                                 ("from x import TABLE as ROUTES", True), ("from x import ROUTES as OTHER", False),
+                                 ("class C:\n    ROUTES = {}", False)):
+            with self.subTest(source=source):
+                self.assertIs(declares, declares_routes(SS.code(source)))
+
+
 def guard(path, method="GET", headers=None):
     """server.H's guard for one request with no session, outside any fence."""
     import server
