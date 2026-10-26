@@ -339,6 +339,8 @@ def observe(pods, now=None, read=None, tail=None, outage=None, sys_ns=None):
                       "detail": f"limit {memory(limit)}" if why == "Ran out of memory" and limit else "",
                       "count": went, "total": total, "exit_code": last.get("exitCode"),
                       "finished_at": last.get("finishedAt", ""),
+                      # The host it restarted on, for the timeline's Host filter (#871).
+                      "node": spec.get("nodeName", ""),
                       **{k: found[k] for k in ("log_tail", "log_error") if k in found}}
             if went > 1:
                 record["note"] = f"{went} restarts since the last look; Kubernetes kept the reason for the last one only"
@@ -374,7 +376,7 @@ def observe(pods, now=None, read=None, tail=None, outage=None, sys_ns=None):
                     else:
                         why, detail = "Pod replaced", ""
                     add(old["app"], {"kind": "replaced", "reason": why, "detail": detail,
-                                     "pod": old.get("pod", ""),
+                                     "pod": old.get("pod", ""), "node": old.get("node", ""),
                                      "replaced_by": (newer[0].get("metadata") or {}).get("name", "")})
                     old["done"] = True
                 elif now - old["ended_at"] > PENDING:

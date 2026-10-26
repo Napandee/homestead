@@ -46,6 +46,28 @@ def _names_tag(ref):
     """Whether a reference names a tag (postgres:16-alpine@sha256:...), not
     only a digest (postgres@sha256:...): parse_image reads none as latest."""
     return ":" in ref.split("@", 1)[0].rsplit("/", 1)[-1]
+
+
+def followed(recorded, deployed):
+    """The image reference a container's updates follow. The recorded tag
+    holds only while the deployed image is Homestead's digest pin of that same
+    repository; an image someone has since set to a tag, or to another
+    repository, is what it follows, and the record is out of date - else a
+    change from frigate:0.18.0 to :stable was still checked against 0.18.0,
+    and its build offered as an update that rolled the app back."""
+    if not recorded:
+        return deployed
+    try:
+        now, then = parse_image(deployed), parse_image(recorded)
+    except ValueError:
+        return recorded
+    # Only a bare digest pin (repo@sha256:...) of the same repository is
+    # Homestead's own: one naming its tag (tag@digest, as git pins it) says
+    # what it follows itself.
+    own_pin = now["digest"] and not _names_tag(deployed) and now["base"] == then["base"]
+    return recorded if own_pin else deployed
+
+
 def _check_deployment(dep, pods, force=False, persist=True, channel=None):
     ns, name = dep["metadata"]["namespace"], dep["metadata"]["name"]
     tracked = U._annotation_json(dep, U.TRACKED)
@@ -62,7 +84,7 @@ def _check_deployment(dep, pods, force=False, persist=True, channel=None):
     images = []
     for container in dep["spec"]["template"]["spec"].get("containers", []):
         deployed = container.get("image", "")
-        source = tracked.get(container["name"]) or deployed
+        source = followed(tracked.get(container["name"]), deployed)
         item = {"container": container["name"], "deployed": deployed, "source": source,
                 "available": False, "current_digest": "", "remote_digest": "",
                 "candidate": source, "candidate_tag": "", "error": "", "running": running}

@@ -150,7 +150,7 @@ def _restarts(since, now, role, unread):
         # message) or the log tail, which are the app's.
         name = r.get("name", "")
         out.append(_entry(at, "restart", tone, f"{name}{words}: {r.get('reason') or 'reason not known'}", _app_href(name),
-                          app=f"{r.get('ns', '')}/{name}"))
+                          app=f"{r.get('ns', '')}/{name}", host=str(r.get("node") or "")))
     return out
 
 
@@ -193,8 +193,16 @@ def _alerts(since, now, role, unread):
         if a.get("category") == "test" or not isinstance(a.get("at"), (int, float)) or a["at"] <= since:
             continue
         tone = "ok" if a.get("phase") == "resolved" else ALERT_TONES.get(a.get("severity"), "info")
-        out.append(_entry(a["at"], "alert", tone, str(a.get("title", "")), str(a.get("href") or "")))
+        href = str(a.get("href") or "")
+        out.append(_entry(a["at"], "alert", tone, str(a.get("title", "")), href, host=_alert_host(href)))
     return out
+
+
+def _alert_host(href):
+    """The host an alert is about (#871): an alert about one links to its
+    Hosts page, /nodes?node=<name>. Any other alert names no host."""
+    url = urllib.parse.urlsplit(href)
+    return (urllib.parse.parse_qs(url.query).get("node") or [""])[0] if url.path == "/nodes" else ""
 
 
 def _hosts(since, now, role, unread):
