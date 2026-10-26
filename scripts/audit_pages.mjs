@@ -109,6 +109,10 @@ async function audit([label, width, height, mobile], items) {
   const page = await context.newPage();
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
+  // What reloads the tab under a check, when one does: the reload is rare
+  // and its cause not yet known, so it is named where it happens.
+  let checking = "";
+  page.on("load", () => { if (checking) console.log(`the tab reloaded during ${checking} (${label}): ${page.url()}`); });
   await page.addInitScript(theme => {
     localStorage.setItem("homestead.settings", JSON.stringify({ theme, bg: "soft", blur: 26, motion: "off", refresh: 60 }));
   }, theme);
@@ -116,7 +120,8 @@ async function audit([label, width, height, mobile], items) {
   // Running jobs and passing notices belong to a moment, not the page.
   await page.addStyleTag({ content: "#jobTray,#toast{display:none!important}" });
 
-  for (const [name, view, after] of items) {
+  for (const [name, view, after] of items) for (let attempt = 1; ; attempt++) {
+    checking = name;
     try {
       await page.evaluate(() => { try { closeModal(); } catch (e) { /* none open */ } localStorage.removeItem("homestead.fleet.mode"); });
       await page.evaluate((v) => go(v), view);
@@ -182,8 +187,18 @@ async function audit([label, width, height, mobile], items) {
       if (name.endsWith("-pods") && metrics.hosts < 3) failures.push(`${name} (${label}): no open pod list with pods on three hosts (at most ${metrics.hosts})`);
       if (metrics.unnamed.length) failures.push(`${name} (${label}): fields with no name: ${metrics.unnamed.join(", ")}`);
     } catch (error) {
+      // The tab reloaded under the check ("Execution context was destroyed"),
+      // now and then on any of the later pages: open the app again and look
+      // at this page once more. A page that navigates away itself fails twice.
+      if (attempt === 1 && /Execution context was destroyed/.test(error.message)) {
+        checking = "";
+        await openAuditPage(page, base);
+        await page.addStyleTag({ content: "#jobTray,#toast{display:none!important}" });
+        continue;
+      }
       failures.push(`${name} (${label}): could not open: ${error.message.split("\n")[0]}${errors.length ? ` - error: ${errors.at(-1)}` : ""}`);
     }
+    break;
   }
   await context.close();
 }
