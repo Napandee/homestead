@@ -215,9 +215,9 @@ class Journal:
             raise Held("Storage API receipt does not match the requested object")
         identity(obj)
 
-    def _refuse(self, event, error):
+    def _refuse(self, event, state):
         self.failed = True
-        event["state"] = "refused" if isinstance(error, urllib.error.HTTPError) and error.code in (400, 401, 403, 404, 409, 422) else "uncertain"
+        event["state"] = state
         try:
             self._save()
         except Held:
@@ -292,8 +292,12 @@ class Journal:
             self._check_target(current, dest)
             before = identity(current)
             moved = [key for key in pinned if before[key] != expected.get(key)] if isinstance(expected, dict) else list(pinned)
-            if moved and not (moved == ["resourceVersion"] and method in ("PUT", "PATCH") and not own
-                              and isinstance(expected.get("settled"), str) and settled(current) == expected["settled"]):
+            # settled, when given, always has to match: the request was built
+            # from that read, whichever identity the caller names.
+            same = not isinstance(expected, dict) or "settled" not in expected or settled(current) == expected["settled"]
+            if not same or (moved and not (moved == ["resourceVersion"] and method in ("PUT", "PATCH") and not own
+                                           and isinstance(expected.get("resourceVersion"), str)
+                                           and isinstance(expected.get("settled"), str))):
                 raise Held("Storage resource changed after review; no request was sent")
             if own and not any(e["method"] == "POST" and e.get("state") == "accepted" and e["target"] == dest
                                and (e.get("after") or {}).get("uid") == before["uid"] for e in self.entries):
@@ -310,6 +314,10 @@ class Journal:
             if any(meta.get(key) is not None and meta[key] != expected[key] for key in before):
                 raise Held("Storage mutation was prepared from a different resource version")
             meta.update(before)
+            # A non-empty managedFields in a write replaces the live set: one
+            # copied from an older read would roll back what controllers have
+            # recorded since. Left out, the API server keeps it as it is.
+            meta.pop("managedFields", None)
         elif method == "DELETE":
             request = {"apiVersion": "v1", "kind": "DeleteOptions", "propagationPolicy": "Background", **(request or {})}
             precondition = {key: before[key] for key in pinned}
@@ -335,15 +343,16 @@ class Journal:
                 result = self.send(method, path, request, **({"ctype": ctype} if ctype else {}))
                 break
             except Exception as error:
+                refused = isinstance(error, urllib.error.HTTPError) and error.code in (400, 401, 403, 404, 409, 422)
                 fresh = self._status_only(error, event, dest, baseline)
                 if fresh is None:
-                    self._refuse(event, error)
+                    self._refuse(event, "refused" if refused else "uncertain")
                     raise Held("Storage request failed or its outcome is uncertain; inspect retained resources. Nothing was retried") from None
                 if self.before_write is not None:
                     try:
                         self.before_write()
                     except Exception:
-                        self._refuse(event, error)  # the 409 stands; nothing more was sent
+                        self._refuse(event, "refused")  # the 409 stands; nothing more was sent
                         raise
             # Refused because of a status write alone: send it again against
             # the new version, recorded durably first.

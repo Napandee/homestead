@@ -542,6 +542,36 @@ class ForeignStatusRaceTests(unittest.TestCase):
         self.assertEqual("refused", self.receipt("stop")["state"])
         self.assertNotEqual(0, self.c.objects[self.c.dep_path]["spec"]["replicas"])
 
+    def admission_changes(self, purpose, change):
+        original = self.c.admit
+        def admit(name, proposed):
+            if name == purpose:
+                change()
+            return original(name, proposed)
+        self.c.admit = admit
+
+    def test_a_status_update_during_switch_admission_does_not_stop_the_move(self):
+        c = self.c; c.switching()
+        self.admission_changes("switch", lambda: self.status(observedGeneration=2, replicas=0))
+        self.assertEqual("start", c.step()["phase"])
+        self.assertEqual("target", c.objects[c.dep_path]["spec"]["template"]["spec"]["volumes"][0]["persistentVolumeClaim"]["claimName"])
+
+    def test_an_edit_during_switch_admission_is_not_overwritten(self):
+        # The switch is built from the read before admission; an edit made
+        # while admission ran must hold the move, not be written over.
+        # A spec edit is caught by the review of the Deployment itself; a
+        # finalizer is not part of that review, and a PUT from the older
+        # read would remove it.
+        c = self.c; c.switching(); before = len(self.puts())
+        def edit():
+            c.objects[c.dep_path]["metadata"]["finalizers"] = ["example.com/keep"]
+            self.status()
+        self.admission_changes("switch", edit)
+        with self.assertRaisesRegex(Held, "changed after review"):
+            c.step()
+        self.assertEqual(before, len(self.puts()))
+        self.assertEqual(["example.com/keep"], c.objects[c.dep_path]["metadata"]["finalizers"])
+
 
 if __name__ == "__main__":
     unittest.main()
