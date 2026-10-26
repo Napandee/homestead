@@ -70,6 +70,7 @@ MODULES = (
     "homestead_app_copies",
     "homestead_app_settings",
     "homestead_audit",
+    "homestead_audit_view",
     "homestead_auth",
     "homestead_auth_routes",
     "homestead_baseline",
