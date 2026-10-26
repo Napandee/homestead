@@ -89,7 +89,7 @@ class DeclaredRoutes(unittest.TestCase):
         table = ROUTES.table()
         self.assertTrue(table)
         for (method, path), route in table.items():
-            self.assertIn(method, ("GET", "POST", "PUT", "DELETE"), path)
+            self.assertIn(method, ROUTES.METHODS, path)
             # Outside /api/ only where the guard does not take it for a page,
             # which it lets through before sign-in (/readyz, /metrics: #736).
             # ModuleRoutesNeedCredentials below is this rule's safety net.
@@ -201,6 +201,38 @@ class ModuleList(unittest.TestCase):
                                  ("class C:\n    ROUTES = {}", False)):
             with self.subTest(source=source):
                 self.assertIs(declares, declares_routes(SS.code(source)))
+
+
+class ServedMethods(unittest.TestCase):
+    """A route is only reached through server.py's handler H, which answers a
+    method only with a do_<METHOD> of its own (#870): any other method gets
+    http.server's 501, so table() refuses a route declared with one."""
+
+    def declare(self, method, path="/api/test/method"):
+        """table() as it reads a module that declares only this route."""
+        module = type(sys)("homestead_test_method")
+        module.ROUTES = {(method, path): ("viewer", lambda request: {})}
+        with mock.patch.dict(sys.modules, {"homestead_test_method": module}), \
+                mock.patch.object(ROUTES, "MODULES", ("homestead_test_method",)), mock.patch.object(ROUTES, "_table", {}):
+            return ROUTES.table()
+
+    def test_the_methods_are_the_ones_h_serves(self):
+        import server
+        served = {name[3:] for name in dir(server.H) if name.startswith("do_")}
+        self.assertEqual(served, set(ROUTES.METHODS), "homestead_routes.METHODS and server.H's do_* methods disagree")
+
+    def test_a_method_h_does_not_serve_is_refused_naming_the_module_and_route(self):
+        for method in ("PUT", "PATCH", "patch", "HEAD", "OPTIONS"):
+            with self.subTest(method=method):
+                with self.assertRaises(ValueError) as refused:
+                    self.declare(method)
+                self.assertIn("homestead_test_method", str(refused.exception))
+                self.assertIn(f"{method} /api/test/method", str(refused.exception))
+
+    def test_a_served_method_is_read_in_any_case(self):
+        for method in ("GET", "post", "Delete"):
+            with self.subTest(method=method):
+                self.assertEqual({(method.upper(), "/api/test/method")}, set(self.declare(method)))
 
 
 def guard(path, method="GET", headers=None):
