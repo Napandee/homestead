@@ -360,6 +360,32 @@ class JobTests(unittest.TestCase):
         self.assertEqual("succeeded", state)
         self.assertIn("Moved 1 container", message)
 
+    def test_its_image_is_pulled_onto_the_new_host_before_it_moves(self):
+        # A host already holding the image scored over the preferred one:
+        # Frigate restarted where it was (#880).
+        import homestead_host_move as HOST_MOVE
+        pulled = [False]
+        with mock.patch.object(C, "_pull_first", return_value=(["pull-1"], ["example/frigate:stable"])), \
+                mock.patch.object(HOST_MOVE, "_pulled", side_effect=lambda names: pulled[0]), \
+                mock.patch.object(HOST_MOVE, "_clear") as clear:
+            message = C.status(self.item)[2]
+            self.assertIn("Pulling example/frigate:stable onto k1 first", message)
+            self.assertEqual([], self.c.moved, "not moved before its image is there")
+            C.status(self.item)
+            self.assertEqual([], self.c.moved)
+            pulled[0] = True
+            self.assertIn("Image on k1", C.status(self.item)[2])
+            clear.assert_called_once_with(["pull-1"])
+            C.status(self.item)
+        self.assertEqual([("frigate", "k1")], self.c.moved)
+
+    def test_one_that_restarts_on_its_old_host_says_so(self):
+        C.status(self.item)
+        self.item["ref"]["started"] -= 700
+        state, _, message = C.status(self.item)
+        self.assertEqual("failed", state)
+        self.assertIn("lab/frigate restarted on k2, not k1", message)
+
     def test_a_null_budget_list_moves_nothing(self):
         """Budgets are checked again before each move: an answer of null is
         not "no budgets"."""
