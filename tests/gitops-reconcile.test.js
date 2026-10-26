@@ -16,7 +16,7 @@ function setup(answers) {
     $: s => s === "#mtitle" ? { textContent: state.title }
       : s === "#mbody" ? { querySelector: q => state.open && dialogs.at(-1)?.html.includes(q.slice(1, -1)) ? {} : null } : null,
     esc: s => String(s).replaceAll("<", "&lt;").replaceAll(">", "&gt;"), copyText: async () => true,
-    fmtAgo: s => `${s} s ago`, jsq: s => `'${s}'`,
+    fmtAgo: s => `${s} s ago`, jsq: s => `'${s}'`, jsArg: s => JSON.stringify(String(s)),
     toast: (text, tone) => toasts.push({ text, tone }),
     modal: (title, html) => { state.open = true; state.title = title; dialogs.push({ title, html }); },
     modalIsOpen: () => state.open,
@@ -55,7 +55,7 @@ test("The review names what Flux applies and every app in it, and sends nothing 
   assert.match(html, /Apps it applies · 2/);
   assert.match(html, /lab\/db/);
   assert.match(html, /kustomize build &lt;failed&gt;/);
-  assert.match(html, /gitopsReconcileGo\(this,'lab','web'\)/);
+  assert.match(html, /gitopsReconcileGo\(this,(&quot;|")lab(&quot;|"),(&quot;|")web(&quot;|")\)/);
   assert.match(html, />Reconcile now</);
   assert.equal(t.posts().length, 0);
 });

@@ -109,7 +109,7 @@ function gitopsReconcile(ns, name) {
   modal(`Reconcile now · ${name}`, gitopsMark(`${ns}/${name}`)
     + UI.lead(esc(`Flux applies ${row.id} again now, from the revision it last fetched from git.`))
     + gitopsFacts(row, apps)
-    + UI.actions(UI.cancel() + UI.button("Reconcile now", `gitopsReconcileGo(this,${jsq(ns)},${jsq(name)})`, { kind: "pri" })));
+    + UI.actions(UI.cancel() + UI.button("Reconcile now", `gitopsReconcileGo(this,${jsArg(ns)},${jsArg(name)})`, { kind: "pri" })));
 }
 async function gitopsReconcileGo(button, ns, name) {
   const key = `${ns}/${name}`, title = `Reconcile now · ${name}`, close = UI.actions(UI.cancel("Close"));
