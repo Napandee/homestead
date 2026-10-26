@@ -7,8 +7,10 @@ first (#734), and a rename, which that tool would turn into two copies,
 needs its own acknowledgement.
 """
 import copy
+import datetime
 import json
 import re
+import time
 import urllib.error
 
 import homestead_kube as KUBE
@@ -184,9 +186,9 @@ def image_yaml(dep, images):
 
 
 # ------------------------------------------------- is Flux applying it? (#742)
-# Read only: each Kustomization and HelmRelease, whether it is Ready, what it
-# last applied and Flux's message when it is not. Homestead's read
-# permission covers every kind (deploy/rbac.yaml), so this needs no more.
+# Each Kustomization and HelmRelease, whether it is Ready, what it last
+# applied and Flux's message when it is not. Homestead's read permission
+# covers every kind (deploy/rbac.yaml); Reconcile now, below, is the one write.
 # Argo CD's Application has another shape and is not read here.
 FLUX = (("Kustomization", "kustomize.toolkit.fluxcd.io", ("v1", "v1beta2"), "kustomizations"),
         ("HelmRelease", "helm.toolkit.fluxcd.io", ("v2", "v2beta2", "v2beta1"), "helmreleases"))
@@ -228,7 +230,11 @@ def _row(kind, obj):
             "suspended": spec.get("suspend") is True, "revision": _revision(kind, status),
             "tried": last.get("lastReconciled") or last.get("lastDeployed") or cond.get("lastTransitionTime", ""),
             "since": cond.get("lastTransitionTime", ""), "interval": spec.get("interval", ""),
-            "message": str(cond.get("message") or "")[:400]}
+            "message": str(cond.get("message") or "")[:400],
+            # Reconcile now: when one was last asked for, and the request Flux
+            # last handled; the same value once Flux has taken it.
+            "requested": str((meta.get("annotations") or {}).get(REQUESTED) or ""),
+            "handled": str(status.get("lastHandledReconcileAt") or "")}
 
 
 def _plural(count, word):
@@ -256,8 +262,52 @@ def _read():
 
 
 def status():
-    """Flux's objects, the apps each applies (ns/name -> id) and one line."""
-    return ROUTER.cached("gitops", EVERY, _read)
+    """Flux's objects, the apps each applies (ns/name -> id) and one line.
+    Read every FOLLOW_EVERY seconds for a while after Reconcile now, so the
+    page sees Flux take the request."""
+    return ROUTER.cached("gitops", FOLLOW_EVERY if time.time() < _following[0] else EVERY, _read)
+
+
+# ------------------------------------------------- Reconcile now (#742 part 2)
+# The standard request Flux answers, as `flux reconcile` makes it: the
+# annotation, set to a new value, on the Kustomization or HelmRelease that
+# applies the app. Flux applies what git has and copies the value to
+# status.lastHandledReconcileAt. Nothing else on the object is touched.
+REQUESTED = "reconcile.fluxcd.io/requestedAt"
+FOLLOW_EVERY = 5     # seconds between reads while following a request
+FOLLOW_FOR = 120     # seconds a request is followed
+_following = [0.0]
+
+
+def _object(row):
+    """The live object and its path, at the version this cluster serves."""
+    _, group, versions, plural = next(entry for entry in FLUX if entry[0] == row["kind"])
+    for version in versions:
+        path = KUBE.api_path(f"/apis/{group}/{version}/namespaces/{row['namespace']}/{plural}/{row['name']}")
+        found = KUBE.get_optional(path)
+        if found is not None:
+            return path, found
+    raise ValueError(f"{row['id']} is no longer there")
+
+
+def reconcile(request):
+    body = request.body if isinstance(request.body, dict) else {}
+    ns, name = body.get("ns"), body.get("name")
+    if not (isinstance(ns, str) and ns and isinstance(name, str) and name):
+        raise ValueError("say which app: ns and name")
+    report = status()
+    source = report["apps"].get(f"{ns}/{name}")
+    row = next((r for r in report["objects"] if r["id"] == source), None)
+    if row is None:
+        raise ValueError(f"Flux does not apply {ns}/{name}")
+    path, live = _object(row)
+    if (live.get("spec") or {}).get("suspend") is True:
+        raise ValueError(f"{row['id']} is suspended, so Flux would not apply it: resume it in git first")
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    KUBE.ksend("PATCH", path, {"metadata": {"annotations": {REQUESTED: stamp}}}, ctype="application/merge-patch+json")
+    _following[0] = time.time() + FOLLOW_FOR
+    ROUTER.forget("gitops")
+    return {"ok": True, "id": row["id"], "requested": stamp}
 
 
 def alert_facts():
@@ -276,4 +326,5 @@ def alert_facts():
 
 ROUTES = {
     ("GET", "/api/gitops"): ("viewer", lambda request: status()),
+    ("POST", "/api/gitops/reconcile"): ("admin", reconcile),
 }

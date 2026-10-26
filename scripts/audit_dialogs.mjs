@@ -121,6 +121,8 @@ const DIALOGS = [
   ["ip-subnets", "network", "ipamSubnets()"],
   ["ip-unifi", "network", "ipamUnifi()"],
   ["ip-import", "network", "ipamImport()"],
+  ["gitops-reconcile-review", "workloads", "gitopsLoad().then(()=>gitopsReconcile('lab','paperless'))"],
+  ["gitops-reconcile-result", "workloads", "gitopsLoad().then(()=>gitopsReconcile('lab','paperless'))", "text:Reconcile now"],
   ["workload-edit", "workloads", "wlEdit('lab','frigate')"],
   ["workload-reservations", "workloads", "reservationsReview()"],
   ["workload-priority", "workloads", "priorityReview()"],
