@@ -247,6 +247,7 @@
   const pod = (name, node, image) => ({ name: `${name}-7d8f6d4c9-demo`, node, phase: "Running",
     ready: true, restarts: 0, container_count: 1,
     containers: [{ name, image, kind: "app", state: "running", ready: true, restarts: 0 }] });
+  const demoTunnelImage = "registry.example.com/network/edge-tunnel:2026.10.1@sha256:faa8e2b1c0d94f3a6b7c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a275f";
   // Harvester unless ?platform=k3s: a plain k3s cluster, for the pages that differ.
   const demoPlatform = new URLSearchParams(location.search).get("platform") || "harvester";
   // The IP addresses page with UniFi connected, until Settings disconnects it.
@@ -322,6 +323,13 @@
       cpu: 0.18, mem_mb: 512, nodes: ["harvester-node3"], hardware: [],
       images: ["ghcr.io/paperless-ngx/paperless-ngx:latest"], ports: [{ port: 8000, ip: "192.0.2.216" }],
       pod_count: 1, container_count: 1, pods: [pod("paperless", "harvester-node3", "ghcr.io/paperless-ngx/paperless-ngx:latest")] },
+    // One pod on each host, with a pinned image (#873): the app card's pod list
+    // shows each host whole and each pod by the part of its name that differs.
+    { name: "edge-tunnel", ns: "lab", kind: "Deployment", failover: "move", desired: 3, ready: 3, uptime: 351200,
+      cpu: 0.03, mem_mb: 96, nodes: ["harvester-node1", "harvester-node2", "harvester-node3"], hardware: [],
+      images: [demoTunnelImage], ports: [], pod_count: 3, container_count: 3,
+      pods: [["hwtkq", "harvester-node1", 0], ["x7k2p", "harvester-node2", 2], ["m4n9r", "harvester-node3", 0]].map(([suffix, node, restarts]) => ({
+        ...pod("edge-tunnel", node, demoTunnelImage), name: `edge-tunnel-55dd45c456-${suffix}`, restarts })) },
     // A first start part-way through its image, and a pod from before still stopping.
     { name: "doublecommander", ns: "lab", kind: "Deployment", failover: "move", desired: 1, ready: 0, uptime: 0,
       cpu: 0, mem_mb: 0, nodes: ["harvester-node1"], hardware: [], images: ["lscr.io/linuxserver/doublecommander:latest"],
@@ -497,6 +505,8 @@
     { name: "pvc-demo-paperless", id: "pvc-demo-paperless", pvc: "paperless-data", exists: false,
       last_backup: "backup-demo-paperless-20260901", last_backup_at: "2026-09-01T02:31:07Z", size_mb: 3420.2, count: 6, target: "default" },
   ];
+  // Only an app with a port has an address and a service; edge-tunnel has none.
+  const exposed = workloads.filter(row => row.ports.length);
   const network = {
     controller: { name: "kube-vip", installed: true, desired: 3, ready: 3, healthy: true,
       mode: "ARP Service controller · explicit VIP allocation" },
@@ -516,11 +526,11 @@
       ports: row.ports.map(port => ({ name: "web", port: port.port, protocol: "TCP" })) })),
       // A pod-network VM can be exposed like an app; the bridged ones use their LAN address.
       { namespace: "lab", name: "ubuntu-test", kind: "VirtualMachine", replicas: 1, ports: [] }],
-    vips: workloads.map(row => ({ ip: row.ports[0].ip, shared: false, services: 1,
+    vips: exposed.map(row => ({ ip: row.ports[0].ip, shared: false, services: 1,
       listeners: [{ namespace: row.ns, service: row.name, port: row.ports[0].port,
         protocol: "TCP", access: `http://${row.ports[0].ip}:${row.ports[0].port}`,
         browser: true, health: "healthy" }] })),
-    services: workloads.map(row => ({ namespace: row.ns, name: row.name, type: "LoadBalancer",
+    services: exposed.map(row => ({ namespace: row.ns, name: row.name, type: "LoadBalancer",
       system: false, managed: true, cluster_ip: `10.43.0.${20 + workloads.indexOf(row)}`,
       external_ips: [row.ports[0].ip], assigned_ips: [row.ports[0].ip], requested_ips: [row.ports[0].ip],
       vip_host: "harvester-node1", selector: { app: row.name }, targets: [row.name],
