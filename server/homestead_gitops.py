@@ -163,8 +163,10 @@ def document(dep, body):
 
 def git_image(item):
     """An update check's image line for git: the new tag, or - when only what
-    the tag points at moved - the tag pinned to the new digest."""
-    if item.get("candidate") != item.get("deployed") or not item.get("remote_digest"):
+    the tag points at moved - the tag pinned to the new digest. An image
+    pinned in git (tag@digest) stays pinned: the new tag at its digest (#874)."""
+    pinned = "@" in (item.get("deployed") or "")
+    if (item.get("candidate") != item.get("deployed") and not pinned) or not item.get("remote_digest"):
         return item["candidate"]
     return f"{item['candidate'].split('@', 1)[0]}@{item['remote_digest']}"
 

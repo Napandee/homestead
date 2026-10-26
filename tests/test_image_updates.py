@@ -365,6 +365,83 @@ class ImageUpdateTests(unittest.TestCase):
 
         self.assertIn("no release tag recorded", image["error"])
 
+    def _pinned(self, image, tags, now):
+        """#874: an image pinned as tag@digest, run on that digest. The
+        registry answers a tag with what it points to now, and a digest with
+        itself."""
+        self.dep["spec"]["template"]["spec"]["containers"] = [{"name": "demo", "image": image}]
+        pinned = image.split("@", 1)[1]
+        pod = {"metadata": {"namespace": "lab", "labels": {"app": "demo"}},
+               "status": {"phase": "Running",
+                          "containerStatuses": [{"name": "demo", "state": {"running": {}},
+                                                 "imageID": "docker.io/library/x@" + pinned}]}}
+        asked = []
+
+        def manifest(ref, *args, **kwargs):
+            asked.append(ref)
+            return {"digest": ref.split("@", 1)[1] if "@" in ref else now, "children": []}
+        with mock.patch.object(updates, "_secret_credentials", return_value={}), \
+                mock.patch.object(updates, "registry_tags", return_value=tags), \
+                mock.patch.object(updates, "manifest_info", side_effect=manifest):
+            report = updates._check_deployment(self.dep, [pod], persist=False)
+        return report["images"][0], asked
+
+    def test_a_pinned_tag_that_is_not_a_release_is_current_when_the_tag_still_points_there(self):
+        old = "sha256:" + "a" * 64
+        image, asked = self._pinned("postgres:16-alpine@" + old, ["16-alpine", "17-alpine"], now=old)
+
+        self.assertEqual("", image["error"], "the tag is recorded: it is 16-alpine")
+        self.assertFalse(image["available"])
+        self.assertEqual(["postgres:16-alpine"], asked, "asks what the tag points to now, not the pin")
+
+    def test_a_pinned_tag_that_is_not_a_release_offers_a_new_build_when_the_tag_moved(self):
+        old, new = "sha256:" + "a" * 64, "sha256:" + "b" * 64
+        image, _ = self._pinned("valkey/valkey:9-alpine@" + old, ["9-alpine"], now=new)
+
+        self.assertEqual("", image["error"])
+        self.assertTrue(image["available"], "the tag was rebuilt upstream")
+        self.assertEqual("9-alpine", image["candidate_tag"], "the page reads it as 9-alpine · new build")
+        self.assertEqual("valkey/valkey:9-alpine", image["candidate"])
+        self.assertEqual((old, new), (image["current_digest"], image["remote_digest"]))
+
+    def test_which_pinned_references_name_a_tag(self):
+        digest = "@sha256:" + "a" * 64
+        cases = {"postgres:16-alpine": True, "postgres": False, "img:latest": True,
+                 "registry.example.com:5000/img": False, "registry.example.com:5000/img:9-alpine": True}
+        for ref, named in cases.items():
+            self.assertIs(named, updates._names_tag(ref + digest), ref)
+
+    def test_a_pinned_release_tag_is_checked_as_before(self):
+        old, new = "sha256:" + "a" * 64, "sha256:" + "b" * 64
+        image, _ = self._pinned("grafana/alloy:v1.21.1@" + old, ["v1.21.1", "v1.22.0"], now=new)
+
+        self.assertEqual("", image["error"])
+        self.assertTrue(image["available"])
+        self.assertEqual(("docker.io/grafana/alloy:v1.22.0", "v1.22.0"), (image["candidate"], image["candidate_tag"]))
+
+        image, asked = self._pinned("grafana/alloy:v1.21.1@" + old, ["v1.21.1"], now=new)
+        self.assertEqual("", image["error"])
+        self.assertFalse(image["available"], "no newer release; the pin itself is what is checked")
+        self.assertEqual(["grafana/alloy:v1.21.1@" + old], asked)
+
+    def test_copy_as_yaml_keeps_the_pin_of_a_pinned_image(self):
+        import homestead_gitops as GITOPS
+        old, new = "sha256:" + "a" * 64, "sha256:" + "b" * 64
+        image, _ = self._pinned("postgres:16-alpine@" + old, ["16-alpine"], now=new)
+        self.assertEqual("postgres:16-alpine@" + new, GITOPS.git_image(image))
+
+        image, _ = self._pinned("grafana/alloy:v1.21.1@" + old, ["v1.21.1", "v1.22.0"], now=new)
+        self.assertEqual("docker.io/grafana/alloy:v1.22.0@" + new, GITOPS.git_image(image),
+                         "a pinned image stays pinned in git: the new release at its digest")
+
+    def test_copy_as_yaml_of_an_unpinned_image_is_unchanged(self):
+        import homestead_gitops as GITOPS
+        new = "sha256:" + "b" * 64
+        self.assertEqual("docker.io/grafana/alloy:v1.22.0", GITOPS.git_image(
+            {"deployed": "grafana/alloy:v1.21.1", "candidate": "docker.io/grafana/alloy:v1.22.0", "remote_digest": new}))
+        self.assertEqual("postgres:16-alpine@" + new, GITOPS.git_image(
+            {"deployed": "postgres:16-alpine", "candidate": "postgres:16-alpine", "remote_digest": new}))
+
     def _check(self, tags, remote, current, running=True):
         self.dep["spec"]["template"]["spec"]["containers"] = [
             {"name": "demo", "image": "ghcr.io/x/demo@sha256:" + current if current

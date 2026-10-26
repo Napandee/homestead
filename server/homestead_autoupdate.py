@@ -63,7 +63,8 @@ def same_tag_only(entry):
     waiting = [i for i in (entry or {}).get("images") or [] if i.get("available")]
     if not waiting or any(i.get("error") for i in (entry or {}).get("images") or []):
         return False
-    return all(i.get("candidate") == i.get("source") for i in waiting)
+    # A pinned image (tag@digest) follows its tag: the pin is not the tag (#874).
+    return all(_tagged(i.get("candidate")) == _tagged(i.get("source")) for i in waiting)
 
 
 def answering(state):

@@ -2767,7 +2767,10 @@ ssh_pwauth: true
         e(3600 * 9 + 60, "schedule", "ok", "nightly-db-dump ran", { app: "lab/nightly-db-dump", href: "/schedules?find=lab/nightly-db-dump" }),
         e(3600 * 33, "schedule", "bad", "nightly-db-dump failed", { app: "lab/nightly-db-dump", href: "/schedules?find=lab/nightly-db-dump" }),
         e(3600 * 33 - 900, "alert", "warn", "Scheduled job nightly-db-dump failed", { href: "/schedules?find=lab/nightly-db-dump" }),
-        ...[14, 15.5, 17, 20].map(h => e(3600 * h, "restart", "warn", "paperless restarted: Ran out of memory (limit 1 GiB)", app("paperless"))),
+        // A restart carries the host its pod ran on (#871), so the Host menu has more than maintenance.
+        // scripts/audit_pages.mjs "timeline-host" filters by this host.
+        ...[14, 15.5, 17, 20].map(h => e(3600 * h, "restart", "warn", "paperless restarted: Ran out of memory (limit 1 GiB)",
+          { ...app("paperless"), host: "harvester-node1" })),
         e(3600 * 26, "change", "info", "paperless changed: app: memory max, outside Homestead", app("paperless")),
         e(3600 * 40, "host", "info", "harvester-node2 went into maintenance (OS update), back after 6 min", { host: "harvester-node2", href: "/nodes?node=harvester-node2" }),
         e(3600 * 40 - 120, "alert", "warn", "harvester-node2 is not ready", { host: "harvester-node2", href: "/nodes?node=harvester-node2" }),
