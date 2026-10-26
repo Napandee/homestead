@@ -37,6 +37,11 @@ class PickTests(unittest.TestCase):
         self.assertIsNone(self.pick([workload()], [entry()], window=False))
         self.assertIsNone(self.pick([workload()], [entry()], policy="notify_only"))
 
+    def test_a_new_build_of_a_pinned_tag_is_the_same_tag(self):
+        # #874: pinned as tag@digest, the check follows the tag itself.
+        pinned = "postgres:16-alpine@sha256:" + "a" * 64
+        self.assertEqual("sonarr", self.pick([workload()], [entry(candidate="postgres:16-alpine", source=pinned)])["name"])
+
     def test_a_new_version_waits_for_someone(self):
         self.assertIsNone(self.pick([workload()], [entry(candidate="lscr.io/linuxserver/sonarr:5.0", source="lscr.io/linuxserver/sonarr:4.0")]))
 
