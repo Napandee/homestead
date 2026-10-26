@@ -73,6 +73,7 @@ const PAGES = [
   ["monitoring", "monitoring"],
   ["timeline", "timeline"],
   ["timeline-30-days", "timeline", "timelineRange('month')"],
+  ["timeline-host", "timeline", "timelineFilter('host', 'harvester-node1')"],
   ["monitoring-30-days", "monitoring", "monitorRange('month')"],
   ["events", "events"],
   ["events-signins", "events", "STATE.eventsTab='signins';viewEvents()"],
