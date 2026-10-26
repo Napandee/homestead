@@ -264,6 +264,13 @@ class FeedTests(DataDir):
         self.assertEqual("node-3", alerts["Root filesystem is 92% full on node-3"])
         self.assertEqual("", alerts["Scheduled job backup failed"], "an alert about an app names no host")
 
+    def test_the_alert_host_comes_from_the_hosts_page_link_only(self):
+        self.assertEqual("node-3", T._alert_host("/nodes?node=node%2D3&section=storage"))
+        self.assertEqual("", T._alert_host("/nodes"))
+        self.assertEqual("", T._alert_host("/nodes?section=hostos"))
+        self.assertEqual("", T._alert_host("/containers?node=node-3"))
+        self.assertEqual("", T._alert_host(""))
+
     def test_an_unreadable_alerts_or_history_file_is_named_not_empty(self):
         import homestead_alerts as ALERTS
         import homestead_history as HISTORY

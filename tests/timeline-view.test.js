@@ -194,11 +194,15 @@ test("a range change keeps the filter, and a choice the new window lacks stays s
   await ctx.timelineRange("week");           // this window answers with no entries
   assert.match(out.html, /<option value="node-2" selected>/);
   assert.equal(rows(out.html), 0);
+  await ctx.viewTimeline();                  // and the refresh after it keeps both
+  assert.match(out.html, /<option value="node-2" selected>/);
+  assert.match(out.calls.at(-1), /^\/api\/timeline\?since=\d+$/);
 });
 
 test("a menu with nothing to choose besides All is not shown", async () => {
   const noHosts = { ...DATA, entries: DATA.entries.filter(e => !e.host), counts: { ...DATA.counts, host: 0 } };
   const { ctx, out } = setup(noHosts);
+  ctx.NAV_TOKEN = 1;
   await ctx.viewTimeline();
   assert.doesNotMatch(out.html, /aria-label="Host"/);
   assert.match(out.html, /aria-label="App"/);
