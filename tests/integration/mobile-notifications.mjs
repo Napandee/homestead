@@ -8,12 +8,18 @@ try{for(const width of [1440,390,320])for(const theme of ['dark','light']){
  await page.goto(`${base}/?demo=1`);await page.locator('[data-widget="nodes"]').waitFor();
  // The check owns its job and alert for the whole run, not just until the next poll (#892): the demo answers every
  // jobs read from window.__demoOps, and every alerts read (the poll, the Alerts dialog) is answered here, as the demo has no hook for it.
- await page.evaluate(async theme=>{clearInterval(window.__loopTimer);SET.theme=theme;SET.motion='off';applySettings();await PWA_ALERTS.request;
+ // The image update check, which first runs 3.5 s after sign-in and adds the bell's container-update rows, runs now instead.
+ await page.evaluate(async theme=>{clearInterval(window.__loopTimer);SET.theme=theme;SET.motion='off';applySettings();
+  clearTimeout(window.__imageUpdateStart);clearInterval(window.__imageUpdateLoop);await loadImageUpdates(false,true);await PWA_ALERTS.request;
   const alerts={active:[{key:'disk',title:'Drive needs attention',body:'2 reallocated sectors',severity:'degraded'}]},real=window.api;
   window.api=(path,...rest)=>String(path).split('?')[0]==='/api/alerts'?Promise.resolve(structuredClone(alerts)):real(path,...rest);
   PWA_ALERTS.report=structuredClone(alerts);STATE.data.operations=window.__demoOps=[{id:'update',title:'Update media server',status:'running',message:'Downloading the replacement container image',progress:42}];paintBell()},theme);
- // A tick of the jobs and alerts polls, as lands mid-check on a loaded machine (#892): the bell still shows the check's job and alert.
- assert.deepEqual(await page.evaluate(async()=>{await Promise.all([refreshOperations(true),refreshPwaAlerts(true)]);paintBell();return {jobs:STATE.data.operations.map(x=>x.id),alerts:PWA_ALERTS.report.active.map(x=>x.key)};}),{jobs:['update'],alerts:['disk']});
+ // A tick of everything the bell shows, as lands mid-check on a loaded machine (#892): the jobs and alerts polls and the
+ // image update check. The bell still holds the check's job and alert, and no row moves, so no tap lands on another row.
+ const tick=await page.evaluate(async()=>{const rows=()=>[...document.querySelectorAll('#bellPop button')].map(b=>b.textContent.trim().replace(/\s+/g,' '));const before=rows();
+  await Promise.all([refreshOperations(true),refreshPwaAlerts(true),loadImageUpdates(false,true)]);paintBell();
+  return {before,after:rows(),jobs:STATE.data.operations.map(x=>x.id),alerts:PWA_ALERTS.report.active.map(x=>x.key)};});
+ assert.deepEqual({jobs:tick.jobs,alerts:tick.alerts},{jobs:['update'],alerts:['disk']});assert.ok(tick.before.some(r=>/container update/.test(r)),'the image check ran before the tick');assert.deepEqual(tick.after,tick.before,'a tick moves no row in the bell');
  const bell=page.locator('#bell>summary');await bell.click();
  if(width<=900){
   const content=page.locator('#notificationsDialogList');await content.waitFor();assert.equal(await page.locator('.actionmenu-portal .bellpop').count(),0);
