@@ -134,3 +134,39 @@ test("a load overtaken by a newer one draws nothing", async () => {
   await newer;
   assert.equal(paints.length, 1);
 });
+
+test("a part that failed is still named while it is read again on a refresh", async () => {
+  const { ctx, answer, fail, last } = page();
+  let done = ctx.viewStorage();
+  await settle();
+  for (const p of PATHS) p === "/api/volumes/old-copies" ? fail(p, "timed out") : answer(p);
+  await done;
+  ctx.viewStorage();
+  await settle();
+  answer("/api/volumes"); await settle();
+  assert.match(last(), /old copies: timed out/, "not shown as no old copies (#620)");
+});
+
+test("a part that answers on the refresh is no longer named as unread", async () => {
+  const { ctx, answer, fail, last } = page();
+  let done = ctx.viewStorage();
+  await settle();
+  for (const p of PATHS) p === "/api/volumes/old-copies" ? fail(p, "timed out") : answer(p);
+  await done;
+  done = ctx.viewStorage();
+  await settle();
+  for (const p of PATHS) answer(p);
+  await done;
+  assert.doesNotMatch(last(), /could not be read/);
+  assert.match(last(), /old-data/);
+});
+
+test("a page that cannot be drawn fails its load rather than hanging it", async () => {
+  const { ctx, answer } = page();
+  const done = ctx.viewStorage();
+  await settle();
+  ctx.storagePaint = () => { throw new Error("broken markup"); };
+  for (const p of PATHS) answer(p);
+  const outcome = await Promise.race([done.then(() => "settled", e => e.message), new Promise(r => setTimeout(() => r("hung"), 500))]);
+  assert.equal(outcome, "broken markup");
+});

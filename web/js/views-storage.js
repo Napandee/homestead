@@ -506,38 +506,48 @@ function otherVolumesHtml(rows) {
    keeps each part's last answer on screen until the new one arrives; another
    visit to the page starts afresh. Parts that answer together are drawn in one
    paint, and a load overtaken by a newer one draws nothing. */
-const STORAGE_PARTS = [
-  ["st", "/api/storage", "totals", null], ["classes", "/api/storage/classes", "storage classes", []],
-  ["v2", "/api/storage/v2", "the V2 engine", null], ["cap", "/api/longhorn/capacity", "capacity", null],
-  ["forecast", "/api/storage/forecast", "the forecast", null], ["oldCopies", "/api/volumes/old-copies", "old copies", []],
-  ["others", "/api/volumes/other", "other volumes", []]];
-let storageLoad = { id: 0, token: null, parts: {} };
+let storageLoad = { id: 0, token: null, parts: {}, missed: {} };
 const partReading = what => `<div class="empty small"><span class="spin2"></span> Reading ${what}…</div>`;
 
 async function viewStorage() {
   if (platformLacks("longhorn", "Volumes")) return;
   const token = window.NAV_TOKEN;
   // Same visit: last answers stay until replaced. Another visit: nothing kept.
-  const kept = storageLoad.token === token ? storageLoad.parts : {};
-  const load = storageLoad = { id: storageLoad.id + 1, token, parts: { ...kept } };
+  const same = storageLoad.token === token;
+  const load = storageLoad = { id: storageLoad.id + 1, token,
+    parts: { ...(same ? storageLoad.parts : {}) }, missed: { ...(same ? storageLoad.missed : {}) } };
   const current = () => storageLoad === load;
   // A part of the page that could not be read is named above the page, not
-  // silently left out (#620): no old copies listed is not no old copies.
-  const missed = [];
-  let volumes = null, queued = null;
+  // silently left out (#620): no old copies listed is not no old copies. A
+  // failure is kept like an answer, so it is still named while it is read again.
+  let volumes = null, queued = null, broken = null;
   const draw = () => {
     if (queued || !current() || !volumes) return;
-    queued = new Promise(resolve => setTimeout(() => { queued = null; if (current()) storagePaint(volumes, load.parts, missed); resolve(); }, 0));
+    queued = new Promise(resolve => setTimeout(() => {
+      queued = null;
+      try { if (current()) storagePaint(volumes, load.parts, Object.values(load.missed)); }
+      catch (e) { broken = broken || e; }
+      resolve();
+    }, 0));
   };
-  const parts = STORAGE_PARTS.map(([key, path, label, fallback]) => api(path)
-    .catch(e => { missed.push(`${label}: ${e.message}`); return fallback; })
-    .then(answer => { load.parts[key] = answer; draw(); }));
+  // A paint that throws fails the load, as before, rather than leaving it unsettled.
+  const drawn = async () => { while (queued) await queued; if (broken) throw broken; };
+  // The path comes first and is written out, so the API contract test reads it.
+  const part = (path, key, label, fallback) => api(path)
+    .then(answer => { delete load.missed[key]; return answer; },
+      e => { load.missed[key] = `${label}: ${e.message}`; return fallback; })
+    .then(answer => { load.parts[key] = answer; draw(); });
+  const parts = [part("/api/storage", "st", "totals", null), part("/api/storage/classes", "classes", "storage classes", []),
+    part("/api/storage/v2", "v2", "the V2 engine", null), part("/api/longhorn/capacity", "cap", "capacity", null),
+    part("/api/storage/forecast", "forecast", "the forecast", null), part("/api/volumes/old-copies", "oldCopies", "old copies", []),
+    part("/api/volumes/other", "others", "other volumes", [])];
   volumes = await api("/api/volumes");
   if (!current()) return;
   draw();
+  await drawn();
   // Settled when the whole page is drawn, as before, for whoever waits on it.
   await Promise.all(parts);
-  await queued;
+  await drawn();
 }
 
 function storagePaint(v, parts, missed) {
