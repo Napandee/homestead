@@ -25,14 +25,27 @@ sys.path.insert(0, str(SS.SERVER))
 SPLITS = {
     "homestead_move_engine": ("homestead_move_state", "homestead_move_target", "homestead_move_plan",
                               "homestead_move_phases", "homestead_move_actions"),
+    "homestead_longhorn": ("homestead_longhorn_jobs", "homestead_longhorn_volumes", "homestead_longhorn_target",
+                           "homestead_longhorn_backups", "homestead_longhorn_restore"),
 }
 
-# What a module handed to bind() reads through it, by holder: the file and how
-# it names the module it was given.
-HOLDERS = {}
+# What a module handed to bind() reads through it, by holder: the files and how
+# they name the module they were given.
+HOLDERS = {
+    # server.py hands homestead_longhorn to the move source and the move engine,
+    # which keeps it on homestead_move_state; their tests hand in a fake.
+    "homestead_longhorn": (("homestead_move_source.py", r"(?<![\w.])LH\.(\w+)"),
+                           ("homestead_move_state.py", r"(?<![\w.])LH\.(\w+)"),
+                           ("homestead_move_*.py", r"\bSTATE\.LH\.(\w+)")),
+}
 
 # The names a split module still offers of its parts, for its HOLDERS.
-INTERFACE = {}
+INTERFACE = {
+    "homestead_longhorn": ("backup_target", "backup_target_state", "backups", "ensure_move_backup",
+                           "ensure_restore_support", "replace_backup_target_state", "restore_backup",
+                           "restore_problem", "restore_support", "transfer_target_state",
+                           "validate_restore_class"),
+}
 
 
 def defined(part):

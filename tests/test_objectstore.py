@@ -11,6 +11,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_kube as KUBE
 import homestead_objectstore as store
+import homestead_longhorn_target as BACKUP_TARGET
 import homestead_network_state as STATE
 
 
@@ -416,7 +417,7 @@ class ObjectStoreTests(unittest.TestCase):
     def test_harvester_waits_for_the_store_before_changing_the_target(self):
         self._service("192.0.2.20", "192.0.2.20")
         self._deployment(0)
-        with mock.patch.object(store.LH, "on_harvester", return_value=True), \
+        with mock.patch.object(BACKUP_TARGET, "on_harvester", return_value=True), \
                 mock.patch.object(store, "ensure_bucket") as bucket:
             with self.assertRaisesRegex(ValueError, "still starting.*waiting"):
                 store.point_longhorn(replace=True)
@@ -429,9 +430,9 @@ class ObjectStoreTests(unittest.TestCase):
             "ports": [{"name": "s3", "port": 9070}]}
         self._deployment(1)
         events = []
-        with mock.patch.object(store.LH, "on_harvester", return_value=True), \
+        with mock.patch.object(BACKUP_TARGET, "on_harvester", return_value=True), \
                 mock.patch.object(store, "ensure_bucket", side_effect=lambda **kw: events.append(("bucket", kw)) or True), \
-                mock.patch.object(store.LH, "set_backup_target", side_effect=lambda *args: events.append(("target", args))):
+                mock.patch.object(BACKUP_TARGET, "set_backup_target", side_effect=lambda *args: events.append(("target", args))):
             result = store.point_longhorn(replace=True)
         self.assertEqual(("bucket", {"base": "http://192.0.2.20:9070", "refresh": True}), events[0])
         self.assertEqual("target", events[1][0])
@@ -443,7 +444,7 @@ class ObjectStoreTests(unittest.TestCase):
         for failure, expected in ((urllib.error.URLError("connection refused"), "not reachable yet"),
                                   (False, "bucket.*not ready")):
             with self.subTest(failure=failure), \
-                    mock.patch.object(store.LH, "on_harvester", return_value=True), \
+                    mock.patch.object(BACKUP_TARGET, "on_harvester", return_value=True), \
                     mock.patch.object(store, "ensure_bucket", side_effect=failure if isinstance(failure, Exception) else None,
                                       return_value=failure):
                 with self.assertRaisesRegex(ValueError, expected):

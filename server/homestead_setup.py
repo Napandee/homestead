@@ -190,7 +190,7 @@ TUNNEL_IMAGES = ("cloudflare/cloudflared", "tailscale/tailscale")
 def welcome(role="admin"):
     """The first-run checklist: the few settings a new cluster wants, each
     with whether it is done. Shown to an admin until one says it is done."""
-    import homestead_longhorn as LH, homestead_networking as NETWORK, homestead_os_rollout as OS_ROLLOUT
+    import homestead_longhorn_target as BACKUP_TARGET, homestead_networking as NETWORK, homestead_os_rollout as OS_ROLLOUT
     import homestead_platform as PLATFORM, homestead_probe as PROBE, homestead_self_address as SELF_ADDRESS
     try:
         with open(os.path.join(DATA_DIR, "welcome.json"), encoding="utf-8") as handle:
@@ -207,7 +207,7 @@ def welcome(role="admin"):
         steps["address"] = {"done": False, "error": str(error)[:160]}
     steps["probe"] = {"done": bool(PROBE.installed())}
     try:
-        steps["backups"] = {"done": bool(LH.backup_target().get("configured"))}
+        steps["backups"] = {"done": bool(BACKUP_TARGET.backup_target().get("configured"))}
     except Exception:
         steps["backups"] = {"done": False}
     steps["updates"] = {"applies": not p.get("harvester") and p.get("distribution") in ("k3s", "rke2"),
@@ -224,7 +224,7 @@ def state(user, role):
     an admin gets their own steps alone."""
     import homestead_api_keys as API_KEYS, homestead_auth as AUTH, homestead_disks as DISKS
     import homestead_fleet as FLEET, homestead_host_console as HOST_CONSOLE, homestead_host_os as HOST_OS
-    import homestead_imports as IMP, homestead_ipam as IPAM, homestead_lifecycle as LC, homestead_longhorn as LH
+    import homestead_imports as IMP, homestead_ipam as IPAM, homestead_lifecycle as LC, homestead_longhorn_target as BACKUP_TARGET
     import homestead_networking as NETWORK, homestead_os_rollout as OS_ROLLOUT, homestead_platform as PLATFORM
     import homestead_push as PUSH, homestead_self_address as SELF_ADDRESS
     cached = homestead_routes.cached
@@ -322,7 +322,7 @@ def state(user, role):
                     "address": report.get("address", ""), "shares": report.get("shares", 0),
                     **({"error": report["error"]} if report.get("error") else {})}
         step("smb", smb)
-        step("backups", lambda: {"done": bool(LH.backup_target().get("configured")), "applies": True})
+        step("backups", lambda: {"done": bool(BACKUP_TARGET.backup_target().get("configured")), "applies": True})
         step("config", lambda: {"done": bool(store.get("config_backup_at")), "applies": True, "at": store.get("config_backup_at")})
         step("osupdates", lambda: {"done": bool((OS_ROLLOUT.settings().get("schedule") or {}).get("enabled")), "applies": kube})
         step("people", lambda: {"done": sum(1 for u in AUTH.list_users() if u["role"] == "admin") >= 2, "applies": True,

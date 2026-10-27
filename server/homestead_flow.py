@@ -2,7 +2,7 @@
 which workloads and VMs use those volumes, and the ports and VIPs that reach
 them - read from the cluster as it is now."""
 import homestead_hardware as HW
-import homestead_longhorn as LH
+import homestead_longhorn_jobs as JOBS
 import homestead_names as NAMES
 import homestead_networking as NETWORK
 import homestead_routes
@@ -74,7 +74,7 @@ def _flow_jobs(vol_by_pvc=None):
         out.append({
             "id": f"j:{meta['namespace']}/{meta['name']}", "name": meta["name"], "ns": meta["namespace"],
             "schedule": spec.get("schedule", ""), "time_zone": spec.get("timeZone") or "",
-            "suspended": bool(spec.get("suspend")), **LH.cron_run_state(status),
+            "suspended": bool(spec.get("suspend")), **JOBS.cron_run_state(status),
             "claims": [{"pvc": c, "vid": ((vol_by_pvc or {}).get(c) or {}).get("id", "")} for c in claims],
         })
     return sorted(out, key=lambda j: (j["ns"], j["name"]))

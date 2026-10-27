@@ -11,6 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_setup as SETUP
 import homestead_share_servers as SERVERS
+import homestead_longhorn_target as BACKUP_TARGET
 
 
 class SetupTests(unittest.TestCase):
@@ -142,7 +143,7 @@ class UniFiSetupStateTests(unittest.TestCase):
                         (server.SELF_ADDRESS, "report", {"on_vip": False, "url": ""}),
                         (server.NETWORK, "registered", []), (server.DISKS, "inventory", {"nodes": {}}),
                         (server, "storage_classes", []), (server, "vm_network_details", []),
-                        (SERVERS, "samba_state", {}), (server.LH, "backup_target", {}),
+                        (SERVERS, "samba_state", {}), (BACKUP_TARGET, "backup_target", {}),
                         (server.OS_ROLLOUT, "settings", {}), (server.AUTH, "list_users", []),
                         (server.IMP, "list_sources", []), (server.API_KEYS, "list_keys", []),
                         (server.FLEET, "summary", {}), (server.HOST_CONSOLE, "inventory", {}),
@@ -238,7 +239,7 @@ class NetworkSetupStateTests(unittest.TestCase):
                         (server.LC, "quorum_report", {"total": 1, "members": [], "ready": 1, "can_lose": 0}),
                         (server.SELF_ADDRESS, "report", {"on_vip": False, "url": ""}),
                         (server.NETWORK, "registered", []), (server.DISKS, "inventory", {"nodes": {}}),
-                        (server, "storage_classes", []), (server.LH, "backup_target", {}),
+                        (server, "storage_classes", []), (BACKUP_TARGET, "backup_target", {}),
                         (server.OS_ROLLOUT, "settings", {}), (server.AUTH, "list_users", []),
                         (server.IPAM, "load", ({}, None)), (server.IMP, "list_sources", []),
                         (server.API_KEYS, "list_keys", []), (server.FLEET, "summary", {}),

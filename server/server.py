@@ -446,7 +446,7 @@ import homestead_lifecycle as LC
 import homestead_stale_mount as STALE_MOUNT
 import homestead_imports as IMP
 import homestead_auth as AUTH
-import homestead_longhorn as LH
+import homestead_longhorn as LH, homestead_longhorn_backups as LH_BACKUPS, homestead_longhorn_volumes as LH_VOLUMES, homestead_longhorn_restore as LH_RESTORE
 import homestead_place as PLACE
 import homestead_hardware as HW
 import homestead_nodes as NODES
@@ -777,13 +777,13 @@ UPLINKS.bind(kget, ksend, lambda: NODES.node_temps())
 for _module in (K3SC, POWER, HOST_CONSOLE, HOST_OS, OS_ROLLOUT, HOST_BRIDGE, HOST_BONDS, UPLINKS,
                 VM_POWER_JOB, RENAME, IMPORT_JOB, AUTOUPDATE, RESTORE_TEST, DISK_V2, DISK_ALLOCATION, LH_RUNTIME, DISKS, HELM, ADDONS):
     _module.register(OPS)
-RESTORE_TEST.bind(kget, ksend, NAMES, lambda volume: LH.backups(volume), LH.restore_backup, OPS._volume_restore,
-                  LH.cleanup_restore_snapshots, LHCAP.status, lambda target: UPTIME.ask_ports(target), lambda: SELF.NS,
+RESTORE_TEST.bind(kget, ksend, NAMES, lambda volume: LH_BACKUPS.backups(volume), LH_RESTORE.restore_backup, OPS._volume_restore,
+                  LH_RESTORE.cleanup_restore_snapshots, LHCAP.status, lambda target: UPTIME.ask_ports(target), lambda: SELF.NS,
                   lambda: CACHE.cached("wl", 5, WORKLOADS.get_workloads), get_app_settings, save_app_settings, _dns_name)
 
 AUTOUPDATE.bind(kget, ksend, UPDATES, lambda: UPTIME.report(),
-                lambda volume, name, annotations: LH.create_snapshot(volume, name, annotations),
-                lambda volume: LH.snapshots(volume), _prune_snapshot, NAMES)
+                lambda volume, name, annotations: LH_VOLUMES.create_snapshot(volume, name, annotations),
+                lambda volume: LH_VOLUMES.snapshots(volume), _prune_snapshot, NAMES)
 
 
 DISKS.setup_module = DISK_SETUP
@@ -949,7 +949,7 @@ def start_self_data_move(body, actor):
 SELF_HEALTH.bind(lambda *a, **k: KUBE_HELPERS.kget(*a, **k), lambda *a, **k: KUBE_HELPERS.ksend(*a, **k),
                  lambda dep=None: SELF_DATA_ROUTES.homestead_data_volume(dep), _heartbeats,
                  lambda: NODES.node_temps(), lambda: SHARE_SERVERS.samba_state(), DEFAULT_NS, LB_IP, HOMESTEAD_VERSION)
-VOLUMES.bind(kget, ksend, LH.snapshots, LH.backups, _cache, SYS_NS, DEFAULT_NS)
+VOLUMES.bind(kget, ksend, LH_VOLUMES.snapshots, LH_BACKUPS.backups, _cache, SYS_NS, DEFAULT_NS)
 SHARES.bind(kget, ksend, create_pvc, SMB_NAMESPACE, _cache)
 SHARES.install = SHARE_SERVERS.install_samba
 SHARE_SERVERS.bind(kget, ksend, lambda cfg: DEPLOY.build_deployment(cfg), SMB_NAMESPACE, _cache,

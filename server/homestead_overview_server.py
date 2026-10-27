@@ -32,7 +32,8 @@ import homestead_host_access as HOSTACCESS
 import homestead_host_os as HOST_OS
 import homestead_housekeeping as HOUSEKEEPING
 import homestead_leader as LEADER
-import homestead_longhorn as LH
+import homestead_longhorn_target as BACKUP_TARGET
+import homestead_longhorn_jobs as JOBS
 import homestead_lhcapacity as LHCAP
 import homestead_lhrebuild as LHREBUILD
 import homestead_logalerts as LOGALERTS
@@ -688,8 +689,8 @@ def get_overview(nodes=None, wl=None, vols=None, pods=None):
     deg = [v for v in vols if v["robustness"] == "degraded"]
     flt = [v for v in vols if v["robustness"] == "faulted"]
     try:
-        protection = protection_issues(cached("lhjobs-health", 60, LH.list_jobs),
-                                       cached("lhtarget-health", 60, LH.backup_target),
+        protection = protection_issues(cached("lhjobs-health", 60, JOBS.list_jobs),
+                                       cached("lhtarget-health", 60, BACKUP_TARGET.backup_target),
                                        cached("trim-health", 60, WEEKLY_TRIM.last_state))
     except Exception:
         protection = []
