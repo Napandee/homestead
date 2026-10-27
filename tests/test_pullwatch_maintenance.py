@@ -7,6 +7,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_lifecycle as lifecycle
+import homestead_node_actions as NODE_ACTIONS
 import homestead_maintenance as maintenance
 import homestead_names as names
 import homestead_pullwatch as pull
@@ -55,7 +56,7 @@ class PullWatchDrainTests(unittest.TestCase):
                 live.clear()
             with mock.patch.object(lifecycle, "kget", side_effect=lambda _: {"items": copy.deepcopy(live)}), \
                     mock.patch.object(lifecycle, "ksend", side_effect=send) as evict:
-                result = lifecycle.drain("node1", include_system=True, reviewed_pods=snapshot, wait=True)
+                result = NODE_ACTIONS.drain("node1", include_system=True, reviewed_pods=snapshot, wait=True)
             evict.assert_called_once()
             self.assertEqual(["lab/" + pod["metadata"]["name"]], result["evicted"])
 
@@ -99,7 +100,7 @@ class PullWatchDrainTests(unittest.TestCase):
         with mock.patch.object(lifecycle, "kget", return_value={"items": [pod]}), \
                 mock.patch.object(lifecycle, "ksend") as send:
             with self.assertRaisesRegex(ValueError, "changed after review"):
-                lifecycle.drain("node1", include_system=True, reviewed_pods=snapshot, wait=True)
+                NODE_ACTIONS.drain("node1", include_system=True, reviewed_pods=snapshot, wait=True)
         send.assert_not_called()
 
 

@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
 import server  # noqa: E402
 import homestead_deploy_manifests as MANIFESTS  # noqa: E402
+import homestead_workload_edit as WORKLOAD_EDIT  # noqa: E402
 import homestead_affinity as AFFINITY  # noqa: E402
 
 PLACEMENT = {"spread": "prefer",
@@ -69,7 +70,7 @@ class DeployPlacementTests(unittest.TestCase):
     def test_a_deployed_apps_placement_is_exactly_what_edit_writes(self):
         choices = {"placement": PLACEMENT, "node": "node-1", "failover": "wait"}
         deployed = self.build(self.cfg(**choices))
-        edited = server.LC.prepare_edit({"ns": "lab", "name": "app", **choices}, current=self.build(self.cfg()))["deployment"]
+        edited = WORKLOAD_EDIT.prepare_edit({"ns": "lab", "name": "app", **choices}, current=self.build(self.cfg()))["deployment"]
         self.assertEqual(self.placed(edited), self.placed(deployed))
         self.assertTrue(self.placed(deployed)["affinity"]["podAffinity"])
         self.assertTrue(self.placed(deployed)["affinity"]["podAntiAffinity"])
@@ -97,7 +98,7 @@ class DeployPlacementTests(unittest.TestCase):
         for extra in cases:
             with self.subTest(extra=extra):
                 with self.assertRaises(ValueError) as edit:
-                    server.LC.prepare_edit({"ns": "lab", "name": "app", **extra}, current=self.build(self.cfg()))
+                    WORKLOAD_EDIT.prepare_edit({"ns": "lab", "name": "app", **extra}, current=self.build(self.cfg()))
                 with self.assertRaises(ValueError) as deploy:
                     self.build(self.cfg(**extra))
                 self.assertEqual(str(edit.exception), str(deploy.exception))

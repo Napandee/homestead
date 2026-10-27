@@ -14,7 +14,7 @@ import homestead_failover as FAILOVER
 import homestead_hardware as HW
 import homestead_host_access as HOSTACCESS
 import homestead_lan as LAN
-import homestead_lifecycle as LC
+import homestead_workload_edit as WORKLOAD_EDIT
 import homestead_memory as MEMORY
 import homestead_names as NAMES
 import homestead_vip_registry as REG
@@ -23,7 +23,6 @@ import homestead_privileges as PRIV
 import homestead_updates as UPDATES
 import homestead_uptime as UPTIME
 import homestead_volowner as VOLOWNER
-import homestead_workload_edit as WORKLOAD_EDIT
 
 
 def analyze_deploy_intent(cfg):
@@ -294,7 +293,7 @@ def build_deployment(cfg):
     tier = deploy_tier(cfg)
     dep, service = _build_deployment_with_extras(cfg)
     if tier:
-        LC._apply_priority(dep["spec"]["template"]["spec"], tier)
+        WORKLOAD_EDIT._apply_priority(dep["spec"]["template"]["spec"], tier)
     # Its hosts, spread and neighbours, written as Edit writes them (#844).
     # Only what was chosen: an empty host would still stamp the pods as moved.
     WORKLOAD_EDIT.apply_placement(dep, {key: cfg[key] for key in ("placement", "node") if cfg.get(key)})
@@ -309,7 +308,7 @@ def _build_deployment_with_extras(cfg):
     dep, _ = _build_single_deployment(cfg)
     changes = [dict(item, new=True, name=item["container_name"], privileges={
         key: item[key] for key in ("privileged", "cap_add", "tun") if key in item}) for item in extras]
-    prepared = LC.prepare_edit({"ns": dep["metadata"]["namespace"], "name": dep["metadata"]["name"],
+    prepared = WORKLOAD_EDIT.prepare_edit({"ns": dep["metadata"]["namespace"], "name": dep["metadata"]["name"],
                                 "containers": changes}, current=dep)
     dep = prepared["deployment"]
     pspec = dep["spec"]["template"]["spec"]
@@ -320,7 +319,7 @@ def _build_deployment_with_extras(cfg):
                   for path, owner in (item.get("volume_owners") or {}).items() if path in mounts]
         if owners:
             helper = VOLOWNER.init_container(owners)
-            helper["name"] = LC._unique_volume_name("hs-owner-" + container["name"], used_names)
+            helper["name"] = WORKLOAD_EDIT._unique_volume_name("hs-owner-" + container["name"], used_names)
             pspec.setdefault("initContainers", []).append(helper)
     all_ports = [port for item in [cfg, *extras] for port in item.get("ports") or []]
     service_ports = [dict(port, name=port.get("name") or f"p{port.get('host') or port['container']}-{str(port.get('protocol') or 'TCP').lower()}") for port in all_ports]

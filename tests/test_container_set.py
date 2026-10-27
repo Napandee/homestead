@@ -10,6 +10,7 @@ import server
 import homestead_deploy_manifests as MANIFESTS
 import homestead_network_services as SVC
 import homestead_lifecycle as lifecycle
+import homestead_workload_edit as WORKLOAD_EDIT
 import homestead_host_access as host_access
 
 
@@ -31,7 +32,7 @@ class ContainerSetTests(unittest.TestCase):
             patch.start(); self.addCleanup(patch.stop)
 
     def prepare(self, **changes):
-        return lifecycle.prepare_edit({"ns": "lab", "name": "media", **changes}, current=self.current)
+        return WORKLOAD_EDIT.prepare_edit({"ns": "lab", "name": "media", **changes}, current=self.current)
 
     def test_add_and_remove_are_explicit_and_leave_source_and_data_untouched(self):
         before = copy.deepcopy(self.current)

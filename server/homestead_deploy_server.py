@@ -31,7 +31,7 @@ import homestead_import_job as IMPORT_JOB
 import homestead_imports as IMP
 import homestead_lan as LAN
 import homestead_leader as LEADER
-import homestead_lifecycle as LC
+import homestead_workload_edit as WORKLOAD_EDIT
 import homestead_move_phases as MOVE_PHASES
 import homestead_move_state as MOVE_STATE
 import homestead_names as NAMES
@@ -481,7 +481,7 @@ def apply_reviewed_edit(b, prepared, hold=False):
         if b["icon"]:
             ann[NAMES.key("icon")] = b["icon"]
             ann[NAMES.key("icon-source")] = b.get("icon_source", b["icon"])
-    result = LC.edit_workload(b, hold=hold, prepared=prepared)
+    result = WORKLOAD_EDIT.edit_workload(b, hold=hold, prepared=prepared)
     if "lan" in b:
         lan_message = edit_lan(b["ns"], result.get("name") or b["name"], b.get("lan"))
         if lan_message:

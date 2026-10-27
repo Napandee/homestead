@@ -225,7 +225,7 @@ def state(user, role):
     an admin gets their own steps alone."""
     import homestead_api_keys as API_KEYS, homestead_auth as AUTH, homestead_disks as DISKS
     import homestead_fleet as FLEET, homestead_host_console as HOST_CONSOLE, homestead_host_os as HOST_OS
-    import homestead_imports as IMP, homestead_ipam as IPAM, homestead_lifecycle as LC, homestead_longhorn_target as BACKUP_TARGET
+    import homestead_imports as IMP, homestead_ipam as IPAM, homestead_node_actions as NODE_ACTIONS, homestead_longhorn_target as BACKUP_TARGET
     import homestead_network_inventory as INV, homestead_os_rollout as OS_ROLLOUT, homestead_platform as PLATFORM
     import homestead_vip_registry as REG
     import homestead_push as PUSH, homestead_self_address as SELF_ADDRESS
@@ -251,7 +251,7 @@ def state(user, role):
 
         def quorum():
             import homestead_roles as ROLES
-            q = LC.quorum_report()
+            q = NODE_ACTIONS.quorum_report()
             raw_nodes = cached("nodes", 5, _bound["nodes"])
             nodes = [{"name": n["name"], "ready": n.get("status") == "Ready", "roles": n.get("roles") or []}
                      for n in raw_nodes]

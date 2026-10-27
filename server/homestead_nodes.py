@@ -16,7 +16,7 @@ import homestead_hardware as HW
 import homestead_host_os as HOST_OS
 import homestead_impact as IMPACT
 import homestead_lhcapacity as LHCAP
-import homestead_lifecycle as LC
+import homestead_node_actions as NODE_ACTIONS
 import homestead_names as NAMES
 import homestead_node_probes as PROBES
 import homestead_network_inventory as INV
@@ -620,7 +620,7 @@ def _drain(request):
     impact = PLACE.impact(b["node"])
     if impact["stranded"] and not b.get("allow_stranded"):
         return ROUTER.Reply(409, {"error": "some workloads have no eligible failover host", "impact": impact})
-    return LC.drain(b["node"], b.get("grace", 30), b.get("system", False))
+    return NODE_ACTIONS.drain(b["node"], b.get("grace", 30), b.get("system", False))
 
 
 ROUTES = {

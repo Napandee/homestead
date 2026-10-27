@@ -14,6 +14,7 @@ import homestead_share_servers as SERVERS
 import homestead_longhorn_target as BACKUP_TARGET
 import homestead_vip_registry as REG
 import homestead_deploy_manifests as MANIFESTS
+import homestead_node_actions as NODE_ACTIONS
 
 
 class SetupTests(unittest.TestCase):
@@ -141,7 +142,7 @@ class UniFiSetupStateTests(unittest.TestCase):
         # Isolate the other guide observations; exercise the real IPAM loader
         # against a ConfigMap response, rather than mocking its tuple away.
         observations = [(SETUP, "DATA_DIR", directory.name), (server.PLATFORM, "detect", {}),
-                        (server.LC, "quorum_report", {"total": 1, "members": [], "ready": 1, "can_lose": 0}),
+                        (NODE_ACTIONS, "quorum_report", {"total": 1, "members": [], "ready": 1, "can_lose": 0}),
                         (server.SELF_ADDRESS, "report", {"on_vip": False, "url": ""}),
                         (REG, "registered", []), (server.DISKS, "inventory", {"nodes": {}}),
                         (server, "storage_classes", []), (server, "vm_network_details", []),
@@ -238,7 +239,7 @@ class NetworkSetupStateTests(unittest.TestCase):
         self.server = server
         directory = tempfile.TemporaryDirectory(); self.addCleanup(directory.cleanup)
         observations = [(SETUP, "DATA_DIR", directory.name), (server.PLATFORM, "detect", {}),
-                        (server.LC, "quorum_report", {"total": 1, "members": [], "ready": 1, "can_lose": 0}),
+                        (NODE_ACTIONS, "quorum_report", {"total": 1, "members": [], "ready": 1, "can_lose": 0}),
                         (server.SELF_ADDRESS, "report", {"on_vip": False, "url": ""}),
                         (REG, "registered", []), (server.DISKS, "inventory", {"nodes": {}}),
                         (server, "storage_classes", []), (BACKUP_TARGET, "backup_target", {}),

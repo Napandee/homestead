@@ -3,8 +3,8 @@ Editing a workload: what an edit would change and whether it restarts the app,
 applying it (containers, volumes, hardware, tier, seed configs), and renaming.
 
 Split by feature from homestead_lifecycle (#623), moved unchanged. Names that
-server.py binds there, or that tests replace there, are read through it (L.name);
-homestead_lifecycle re-exports everything here.
+server.py binds there are read through it (L.name), so a replacement there
+still applies; read and replace the names defined here, here.
 """
 import hashlib
 import copy
@@ -67,7 +67,7 @@ def _prepare_seed_configs(ns, dep, requested):
         return []
     allowed = {
         (x["init_container"], x["config_map"], x["key"])
-        for x in L.seed_configs(ns, dep)
+        for x in seed_configs(ns, dep)
     }
     updates = {}
     for item in requested:
@@ -733,5 +733,5 @@ def edit_workload(cfg, hold=False, prepared=None):
     return {"ok": True, "name": name, **({"held_replicas": held, "_held_receipt": saved} if hold else {})}
 
 
-# homestead_lifecycle holds the bound state and re-exports this module, so it is imported last.
+# homestead_lifecycle holds the bound state, so it is imported last.
 import homestead_lifecycle as L  # noqa: E402

@@ -25,6 +25,7 @@ import homestead_host_access as HOSTACCESS
 import homestead_icons as ICONS
 import homestead_lan as LAN
 import homestead_lifecycle as LC
+import homestead_workload_edit as WORKLOAD_EDIT
 import homestead_logsearch as LOGSEARCH
 import homestead_names as NAMES
 import homestead_network_services as SVC
@@ -612,7 +613,7 @@ def edit_capacity_plan(config):
         if (config["ns"], config["name"], config["workload_name"]) != (ns, name, new_name):
             raise ValueError("Use exact lowercase Kubernetes names for the rename")
         guard_self(ns, name, renaming=True)
-        proposed, context = RENAME.prepare(config, current, LC._renamed_deployment, kget)
+        proposed, context = RENAME.prepare(config, current, WORKLOAD_EDIT._renamed_deployment, kget)
         post_stop = copy.deepcopy(proposed)
         post_stop["spec"]["strategy"] = {"type": "Recreate"}  # rename orchestration, not a saved strategy change
         plan = ROLLOUT_CAPACITY.plan(current, post_stop, ns, kget, PLACE.get_nodes, PLACE.manifest_plan,
@@ -623,7 +624,7 @@ def edit_capacity_plan(config):
         return {"deployment": proposed, "name": new_name, "claims": [], "seeds": []}, context, plan
     if config.get("remove_containers") and is_self(ns, name):
         raise ValueError("Homestead cannot remove its own containers from this page")
-    prepared = LC.prepare_edit(config, current=current)
+    prepared = WORKLOAD_EDIT.prepare_edit(config, current=current)
     context = {"action": "edit", **rollout_review_context(current),
                "seeds": [(path, cm.get("metadata", {}).get("resourceVersion")) for path, cm in prepared["seeds"]]}
     proposed = copy.deepcopy(prepared["deployment"])
@@ -632,7 +633,7 @@ def edit_capacity_plan(config):
         raise ValueError("Increasing replicas of a paused Deployment needs a separate capacity review; resume it before editing replicas")
     if prepared["name"] != name:
         count = proposed["spec"].get("replicas", 1)
-        proposed = LC._renamed_deployment(proposed, ns, prepared["name"])
+        proposed = WORKLOAD_EDIT._renamed_deployment(proposed, ns, prepared["name"])
         proposed["spec"].update(replicas=count, strategy={"type": "Recreate"})
     moves = RESTRUCTURE.copies(config)
     if moves:
@@ -830,7 +831,7 @@ def workload_edit_payload(ns, name, deployment, hardware_definitions=None, servi
         # Starts after (#746): the setting, and whether its gate is in the template.
         "starts_after": START_ORDER.read(deployment), "start_gate": START_ORDER.gate_state(deployment),
         "has_service": bool(listeners),
-        "seed_configs": LC.seed_configs(ns, deployment),
+        "seed_configs": WORKLOAD_EDIT.seed_configs(ns, deployment),
         "container_name": first["name"], "image": first["image"], "cpu": first["cpu"], "memory": first["memory"],
         "memory_limit": first["memory_limit"],
         "env": first["env"], "ports": first["ports"], "volumes": first["volumes"], "gpu": "igpu" in detected,

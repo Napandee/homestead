@@ -442,7 +442,7 @@ _shim = _types.ModuleType("homestead_shim")
 _shim.raw_get = raw_get
 sys.modules["homestead_shim"] = _shim
 
-import homestead_lifecycle as LC
+import homestead_lifecycle as LC, homestead_node_actions as NODE_ACTIONS
 import homestead_stale_mount as STALE_MOUNT
 import homestead_imports as IMP
 import homestead_auth as AUTH
@@ -556,7 +556,7 @@ AUTH.bind(kget, _auth_ksend, DEFAULT_NS)
 CAPACITY_REVIEW.bind(AUTH.review_signing_key)
 LH.bind(kget, ksend, _cache, STORAGE_CLASS, DEFAULT_NS)
 PLACE.bind(kget, ksend, lambda: CACHE.cached("nodes", 5, NODES.get_nodes), _cache, HW.features)
-POWER.bind(kget, PLACE.impact, LC.quorum_report, lambda: LC.NODE_POWER_ENABLED)
+POWER.bind(kget, PLACE.impact, NODE_ACTIONS.quorum_report, lambda: LC.NODE_POWER_ENABLED)
 HOLD.bind(kget, ksend, (SELF.NS, NAMES.BRAND), POD_NAME)
 # The helper image is read from Homestead's own pod, defined further down.
 POWER_JOBS.bind(kget, ksend, lambda read, ns: SELF_DATA_ROUTES._self_data_helper_image(read, ns), homestead_running_on, POD_NAME)
@@ -762,7 +762,7 @@ SELF_ADDRESS.bind(kget, NETWORK, OBJECTS, SELF.NS, os.environ.get("PORT", "8080"
                   follow_fleet=lambda: _follow_fleet_address())
 
 BASELINE.vip_setup = installer_vip
-OS_ROLLOUT.bind(kget, PLATFORM.detect, HOST_OS, POWER_JOBS.rollout_reboot, operation_item, LC.set_cordon, own_node, DATA_DIR,
+OS_ROLLOUT.bind(kget, PLATFORM.detect, HOST_OS, POWER_JOBS.rollout_reboot, operation_item, NODE_ACTIONS.set_cordon, own_node, DATA_DIR,
                 lambda rollout: OPS.start("os-rollout", f"Update every host's OS ({len(rollout['nodes'])} hosts)",
                                           {"kind": "Node", "name": ", ".join(rollout["nodes"])[:200]}, "/nodes",
                                           {"rollout": rollout["id"]},
