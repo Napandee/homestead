@@ -11,6 +11,7 @@ import test_vm_create as create_fixtures
 import homestead_vms as vms
 import homestead_vm_edit as VM_EDIT
 import homestead_imports as imports
+import homestead_vm_create as VM_CREATE
 
 try:
     import yaml
@@ -205,42 +206,42 @@ class CreatePreparationTests(unittest.TestCase):
     def test_invalid_network_after_disk_definition_does_not_create_disk(self):
         for platform in (create_fixtures.K3S_BARE, create_fixtures.HARVESTER):
             with self.assertRaises(ValueError):
-                imports.create_vm({**self.body, "network": "not a network"}, platform, "storage")
+                VM_CREATE.create_vm({**self.body, "network": "not a network"}, platform, "storage")
         self.assertEqual([], self.fixture.sent)
 
     def test_invalid_static_ip_does_not_create_claim_or_secret(self):
         with self.assertRaises(ValueError):
-            imports.create_vm({**self.body, "static_ip": {"address": "192.0.2.2"}}, create_fixtures.K3S_BARE, "storage")
+            VM_CREATE.create_vm({**self.body, "static_ip": {"address": "192.0.2.2"}}, create_fixtures.K3S_BARE, "storage")
         self.assertEqual([], self.fixture.sent)
 
     def test_invalid_cpu_memory_and_disk_are_zero_write(self):
         for fields in ({"cores": 0}, {"cores": 129}, {"memory": "0Gi"}, {"memory": "nonsense"}, {"disk_gb": -1}):
             with self.subTest(fields=fields), self.assertRaises(ValueError):
-                imports.create_vm({**self.body, **fields}, create_fixtures.K3S_BARE, "storage")
+                VM_CREATE.create_vm({**self.body, **fields}, create_fixtures.K3S_BARE, "storage")
         self.assertEqual([], self.fixture.sent)
 
     def test_pure_preparation_includes_both_planned_claim_and_secret(self):
-        prepared = imports.prepare_vm(self.body, create_fixtures.K3S_BARE, "storage")
+        prepared = VM_CREATE.prepare_vm(self.body, create_fixtures.K3S_BARE, "storage")
         self.assertEqual(1, len(prepared["claims"]))
         self.assertEqual(1, len(prepared["secrets"]))
         self.assertEqual([], self.fixture.sent)
 
     def test_prepare_harvester_url_never_starts_download(self):
         with mock.patch.object(imports.HVIMAGE, "download") as download:
-            prepared = imports.prepare_vm({**self.body, "image_url": "https://example.test/vm.img"}, create_fixtures.HARVESTER, "storage")
+            prepared = VM_CREATE.prepare_vm({**self.body, "image_url": "https://example.test/vm.img"}, create_fixtures.HARVESTER, "storage")
         self.assertEqual(1, len(prepared["downloads"]))
         download.assert_not_called()
         self.assertEqual([], self.fixture.sent)
 
     def test_new_admission_refusal_after_download_creates_no_claim_secret_or_vm(self):
-        prepared = imports.prepare_vm({**self.body, "image_url": "https://example.test/vm.img"}, create_fixtures.HARVESTER, "storage")
+        prepared = VM_CREATE.prepare_vm({**self.body, "image_url": "https://example.test/vm.img"}, create_fixtures.HARVESTER, "storage")
         with mock.patch.object(imports.HVIMAGE, "download", return_value={"namespace": "lab", "name": "image", "storage_class": "image-sc"}):
             with self.assertRaisesRegex(ValueError, "refused"):
-                imports.commit_vm(prepared, before_save=mock.Mock(side_effect=ValueError("refused")))
+                VM_CREATE.commit_vm(prepared, before_save=mock.Mock(side_effect=ValueError("refused")))
         self.assertEqual([], self.fixture.sent)
 
     def test_failed_vm_creation_keeps_dependencies_instead_of_deleting_them(self):
-        prepared = imports.prepare_vm(self.body, create_fixtures.K3S_BARE, "storage")
+        prepared = VM_CREATE.prepare_vm(self.body, create_fixtures.K3S_BARE, "storage")
         send = imports.ksend
         def fail(method, path, body=None, **kwargs):
             if path.endswith("/virtualmachines"):
@@ -248,7 +249,7 @@ class CreatePreparationTests(unittest.TestCase):
             return send(method, path, body, **kwargs)
         with mock.patch.object(imports, "ksend", side_effect=fail):
             with self.assertRaises(urllib.error.HTTPError):
-                imports.commit_vm(prepared)
+                VM_CREATE.commit_vm(prepared)
         self.assertEqual(["POST", "POST"], [method for method, _, _ in self.fixture.sent])
 
     def test_cloud_init_password_reaches_the_vm_as_typed(self):
@@ -257,7 +258,7 @@ class CreatePreparationTests(unittest.TestCase):
         for password in ("abc def #ghi12", "#secretpass1", "*secretpass1", "abc: defghij", "1234567890",
                          "päss🔑word12"):
             with self.subTest(password=password):
-                prepared = imports.prepare_vm({**self.body, "password": password}, create_fixtures.K3S_BARE, "storage")
+                prepared = VM_CREATE.prepare_vm({**self.body, "password": password}, create_fixtures.K3S_BARE, "storage")
                 userdata = base64.b64decode(prepared["secrets"][0]["data"]["userdata"]).decode()
                 line = next(line for line in userdata.splitlines() if line.startswith("password: "))
                 value = line[len("password: "):]

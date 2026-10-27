@@ -444,7 +444,7 @@ sys.modules["homestead_shim"] = _shim
 
 import homestead_lifecycle as LC, homestead_node_actions as NODE_ACTIONS
 import homestead_stale_mount as STALE_MOUNT
-import homestead_imports as IMP
+import homestead_imports as IMP, homestead_vm_create as VM_CREATE
 import homestead_auth as AUTH
 import homestead_longhorn as LH, homestead_longhorn_backups as LH_BACKUPS, homestead_longhorn_volumes as LH_VOLUMES, homestead_longhorn_restore as LH_RESTORE
 import homestead_place as PLACE
@@ -706,7 +706,7 @@ VM_REVIEW.bind(lambda *a, **k: KUBE_HELPERS.kget(*a, **k), lambda *a, **k: KUBE_
                lambda: SETTINGS_HELPERS.get_app_settings(), lambda *a: VM_ROUTES.vm_default_class(*a), lambda ip: VM_ROUTES.vm_address_problem(ip),
                lambda: vm_create_options())
 VMUSAGE.bind(kget)
-VMS.platform, VMS.images = PLATFORM.detect, IMP.list_vm_images
+VMS.platform, VMS.images = PLATFORM.detect, VM_CREATE.list_vm_images
 STORAGE_CLASSES.bind(kget, ksend, storage_classes, _dns_name, lambda: NODES.node_temps(), _cache, DATA_DIR, DEFAULT_NS,
                      selectable_storage_classes, shared_storage_classes, storage_class_facts)
 STORAGE.bind(kget, ksend, storage_classes, create_pvc, age_secs, _cache, SYS_NS, DEFAULT_NS, storage_runtime_check)
@@ -794,7 +794,7 @@ DISKS.autotag_state = lambda: os.path.join(DATA_DIR, "disk-autotags.json")
 
 VMSTORE.bind(kget, ksend, DEFAULT_NS, PLATFORM.detect,
              lambda url, display, reuse: HVIMAGE.download(KUBE_HELPERS.kget, KUBE_HELPERS.ksend, DEFAULT_NS, url, "", None, display, reuse),
-             IMP.list_vm_images, _vm_image_disks,
+             VM_CREATE.list_vm_images, _vm_image_disks,
              lambda ns, name: KUBE_HELPERS.ksend("DELETE", f"/apis/harvesterhci.io/v1beta1/namespaces/{ns}/virtualmachineimages/{name}"))
 SNAPSHOT_DELETE.bind(kget, ksend)
 DISKS.bind(kget, ksend, NODES.node_temps)

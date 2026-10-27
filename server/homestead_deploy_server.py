@@ -28,7 +28,7 @@ import homestead_helm as HELM
 import homestead_host_access as HOSTACCESS
 import homestead_icons as ICONS
 import homestead_import_job as IMPORT_JOB
-import homestead_imports as IMP
+import homestead_container_import as CONTAINER_IMPORT
 import homestead_lan as LAN
 import homestead_leader as LEADER
 import homestead_workload_edit as WORKLOAD_EDIT
@@ -119,10 +119,10 @@ def import_capacity_plan(body):
     ns = cfg["namespace"] = import_namespace(body.get("namespace"))
     guard_managed_smb(ns, cfg.get("name"))
     cfg = SVC.prepare_deploy(cfg)  # read-only VIP selection and validation
-    prepared = IMP.prepare_import(cfg)
+    prepared = CONTAINER_IMPORT.prepare_import(cfg)
     if prepared["job"] and cfg.get("source_consistency") not in ("stopped", "snapshot"):
         raise ValueError("Choose whether the source writers are stopped or the copied paths are a consistent snapshot")
-    inventory, pods = IMP.import_inventory(prepared, kget)
+    inventory, pods = CONTAINER_IMPORT.import_inventory(prepared, kget)
     threshold = get_app_settings()["thresholds"]["memory"]["critical"]
     claims = {row["name"]: row for row in prepared["volumes"] if row["create"]}
     nodes = PLACE.get_nodes()

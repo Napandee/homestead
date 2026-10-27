@@ -13,6 +13,7 @@ import homestead_names as names
 import homestead_pullwatch as pull
 import homestead_runtime as runtime
 import homestead_imports as imports
+import homestead_image_cache as IMAGES
 from fakes.platform import plain_platform
 from test_cluster_shutdown import Fake
 import test_node_power_plan as power_fixtures
@@ -193,9 +194,9 @@ class AllMaintenanceHelpersTests(unittest.TestCase):
                  {"metadata": {"name": "closed"}, "spec": {"unschedulable": True},
                   "status": {"conditions": [{"type": "Ready", "status": "True"}]}}]
         with mock.patch.object(imports, "kget", return_value={"items": nodes}), \
-                mock.patch.object(imports, "ksend") as send, mock.patch.object(imports, "_save_scans"), \
-                mock.patch.object(imports, "_bust"), mock.patch.object(imports, "_SCAN_STARTED", [0]):
-            self.assertEqual(["open"], imports.start_image_scan()["nodes"])
+                mock.patch.object(imports, "ksend") as send, mock.patch.object(IMAGES, "_save_scans"), \
+                mock.patch.object(imports, "_bust"), mock.patch.object(IMAGES, "_SCAN_STARTED", [0]):
+            self.assertEqual(["open"], IMAGES.start_image_scan()["nodes"])
         send.assert_called_once()
         self.assertIs(False, send.call_args.args[2]["spec"]["automountServiceAccountToken"])
 

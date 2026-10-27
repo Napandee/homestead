@@ -6,6 +6,7 @@ from unittest import mock
 import test_vm_create as create_fixtures
 import test_vm_edit as edit_fixtures
 import homestead_imports as imports
+import homestead_vm_create as VM_CREATE
 import homestead_vms as vms
 import homestead_vm_edit as VM_EDIT
 import homestead_vm_write as journal
@@ -30,13 +31,13 @@ class WriteIntegrationTests(unittest.TestCase):
         fixture = create_fixtures.VmCreateTests()
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
-        return imports.prepare_vm({"name": "new-vm", "namespace": "lab", "password": "private-login",
+        return VM_CREATE.prepare_vm({"name": "new-vm", "namespace": "lab", "password": "private-login",
                                    "memory": "2Gi", "network": "pod", **cfg}, platform or create_fixtures.K3S_BARE, "storage")
 
     def test_create_journals_claim_secret_vm_and_owner_patch_without_global_replacement(self):
         prepared = self.prepare_create()
         with mock.patch.object(imports, "ksend", side_effect=AssertionError("global write bypassed journal")):
-            result = imports.commit_vm(prepared, send=self.writer)
+            result = VM_CREATE.commit_vm(prepared, send=self.writer)
         self.writer.check()
         accepted = [row for row in self.events if row["phase"] == "accepted"]
         self.assertEqual(["PersistentVolumeClaim", "Secret", "VirtualMachine", "Secret"], [row["resource"]["kind"] for row in accepted])
@@ -64,7 +65,7 @@ class WriteIntegrationTests(unittest.TestCase):
                 raise TimeoutError("private-response")
             return transport(method, path, body, **kwargs)
         self.writer.send = send
-        result = imports.commit_vm(prepared, send=self.writer)
+        result = VM_CREATE.commit_vm(prepared, send=self.writer)
         self.assertIn("ownership could not be recorded", result["warning"])
         self.assertEqual("uncertain", self.events[-1]["phase"])
         with self.assertRaises(journal.WriteFailure):
@@ -78,7 +79,7 @@ class WriteIntegrationTests(unittest.TestCase):
             return {"namespace": namespace, "name": "image-test", "storage_class": "image-sc"}
         prepared = self.prepare_create(create_fixtures.HARVESTER, image_url="https://example.test/private-image")
         with mock.patch.object(imports.HVIMAGE, "download", side_effect=download):
-            imports.commit_vm(prepared, send=self.writer)
+            VM_CREATE.commit_vm(prepared, send=self.writer)
         self.assertEqual("VirtualMachineImage", self.events[0]["resource"]["kind"])
         self.assertNotIn("private-image", json.dumps(self.events))
         self.events.clear()

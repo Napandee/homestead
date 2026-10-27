@@ -15,7 +15,7 @@ import homestead_cancel as CANCEL
 import homestead_deploy_appstore as APPSTORE
 import homestead_helm as HELM
 import homestead_icons as ICONS
-import homestead_imports as IMP
+import homestead_vm_create as VM_CREATE
 import homestead_ipam as IPAM
 import homestead_isos as ISOS
 import homestead_lan as LAN
@@ -116,7 +116,7 @@ def vm_create_options():
             "storage_classes": selectable_storage_classes(rows),
             "storage_class_facts": storage_class_facts(rows),
             "default_class": vm_default_class(rows),
-            "images": IMP.list_vm_images() if platform.get("harvester") else [],
+            "images": VM_CREATE.list_vm_images() if platform.get("harvester") else [],
             "store": VMSTORE.choices() if (platform.get("harvester") or platform.get("cdi")) else [],
             "networks": vm_networks(),
             "network_details": vm_network_details(),
@@ -151,7 +151,7 @@ def create_vm_with_address(cfg):
         problem = vm_address_problem(str(static.get("address") or "").strip())
         if problem:
             raise ValueError(problem)
-    result = IMP.create_vm(cfg, PLATFORM.detect(), vm_default_class())
+    result = VM_CREATE.create_vm(cfg, PLATFORM.detect(), vm_default_class())
     if result.get("address"):
         try:
             IPAM.save_record({"ip": result["address"], "name": cfg.get("name", ""), "kind": "static",
@@ -203,7 +203,7 @@ def _remove_cluster_vm(ns, node):
 
 def _vm_image_disks():
     try:
-        return {f"{row['namespace']}/{row['name']}": row.get("disks") or [] for row in IMP.vm_image_cache()["images"]}
+        return {f"{row['namespace']}/{row['name']}": row.get("disks") or [] for row in VM_CREATE.vm_image_cache()["images"]}
     except Exception:
         return {}
 

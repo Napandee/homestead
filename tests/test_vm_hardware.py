@@ -12,6 +12,7 @@ import homestead_isos as ISOS
 import homestead_vms as vms
 import homestead_vm_edit as VM_EDIT
 import homestead_imports as imports
+import homestead_vm_create as VM_CREATE
 import test_vm_edit as edit_fixtures
 
 
@@ -302,7 +303,7 @@ class InstallTests(unittest.TestCase):
         import homestead_passthrough as passthrough
         with mock.patch.object(imports, "iso_ready", return_value={}), \
                 mock.patch.object(passthrough, "resources", return_value={"resources": [{"resource": "example/gpu", "kind": "pci", "gpu": True}]}):
-            plan = imports.prepare_vm({"name": "gpu", "install_iso": "iso-ubuntu", "hardware": {"boot_output": "gpu"},
+            plan = VM_CREATE.prepare_vm({"name": "gpu", "install_iso": "iso-ubuntu", "hardware": {"boot_output": "gpu"},
                 "host_devices": {"add": [{"resource": "example/gpu"}]}}, {"harvester": False, "cdi": True}, "longhorn")
         self.assertEqual("gpu", HW.read(plan["vm"])["boot_output"])
         self.assertEqual("uefi", HW.read(plan["vm"])["firmware"])
@@ -310,7 +311,7 @@ class InstallTests(unittest.TestCase):
 
     def test_windows_gets_its_virtio_drivers_in_a_second_drive(self):
         with mock.patch.object(imports, "iso_ready", lambda ns, name: {}):
-            plan = imports.prepare_vm({"name": "w11", "install_iso": "iso-win11-1", "drivers_iso": "iso-virtio-win-1", "disk_gb": 64},
+            plan = VM_CREATE.prepare_vm({"name": "w11", "install_iso": "iso-win11-1", "drivers_iso": "iso-virtio-win-1", "disk_gb": 64},
                                       {"harvester": False, "cdi": True}, "longhorn")
             spec = plan["vm"]["spec"]["template"]["spec"]
             drivers = next(d for d in spec["domain"]["devices"]["disks"] if d["name"] == "drivers")
@@ -318,25 +319,25 @@ class InstallTests(unittest.TestCase):
             self.assertNotIn("bootOrder", drivers, "the installer boots, not the drivers")
             self.assertIn({"name": "drivers", "persistentVolumeClaim": {"claimName": "iso-virtio-win-1"}}, spec["volumes"])
             with self.assertRaisesRegex(ValueError, "installer itself"):
-                imports.prepare_vm({"name": "w11", "install_iso": "iso-win11-1", "drivers_iso": "iso-win11-1"},
+                VM_CREATE.prepare_vm({"name": "w11", "install_iso": "iso-win11-1", "drivers_iso": "iso-win11-1"},
                                    {"harvester": False, "cdi": True}, "longhorn")
 
     def test_a_windows_guest_gets_a_network_card_it_has_a_driver_for(self):
         with mock.patch.object(imports, "iso_ready", lambda ns, name: {}):
-            plan = imports.prepare_vm({"name": "w11", "install_iso": "iso-win11-1", "disk_gb": 64, "nic_model": "e1000e"},
+            plan = VM_CREATE.prepare_vm({"name": "w11", "install_iso": "iso-win11-1", "disk_gb": 64, "nic_model": "e1000e"},
                                       {"harvester": False, "cdi": True}, "longhorn")
-            plain = imports.prepare_vm({"name": "deb", "install_iso": "iso-debian-1", "disk_gb": 20},
+            plain = VM_CREATE.prepare_vm({"name": "deb", "install_iso": "iso-debian-1", "disk_gb": 20},
                                        {"harvester": False, "cdi": True}, "longhorn")
         nic = plan["vm"]["spec"]["template"]["spec"]["domain"]["devices"]["interfaces"][0]
         self.assertEqual(("e1000e", {}), (nic["model"], nic["masquerade"]))
         self.assertEqual("virtio", plain["vm"]["spec"]["template"]["spec"]["domain"]["devices"]["interfaces"][0]["model"])
         with self.assertRaisesRegex(ValueError, "network card"):
-            imports.prepare_vm({"name": "w11", "install_iso": "iso-win11-1", "nic_model": "ne2k"},
+            VM_CREATE.prepare_vm({"name": "w11", "install_iso": "iso-win11-1", "nic_model": "ne2k"},
                                {"harvester": False, "cdi": True}, "longhorn")
 
     def test_a_vm_installs_from_an_iso_onto_a_blank_disk_with_its_preset(self):
         with mock.patch.object(imports, "iso_ready", lambda ns, name: {}):
-            plan = imports.prepare_vm({"name": "win", "install_iso": "iso-win11-1", "disk_gb": 64,
+            plan = VM_CREATE.prepare_vm({"name": "win", "install_iso": "iso-win11-1", "disk_gb": 64,
                                        "hardware": {"firmware": "uefi", "secure_boot": True, "tpm": "persistent"}},
                                       {"harvester": False, "cdi": True}, "longhorn")
         spec = plan["vm"]["spec"]["template"]["spec"]
@@ -346,7 +347,7 @@ class InstallTests(unittest.TestCase):
         self.assertFalse(any("cloudInitNoCloud" in v for v in spec["volumes"]), "no password: the installer asks")
         self.assertEqual({"persistent": True}, spec["domain"]["devices"]["tpm"])
         with self.assertRaisesRegex(ValueError, "blank disk"):
-            imports.prepare_vm({"name": "win", "install_iso": "iso-win11-1", "image_url": "https://x.test/a.img"},
+            VM_CREATE.prepare_vm({"name": "win", "install_iso": "iso-win11-1", "image_url": "https://x.test/a.img"},
                                {"harvester": False, "cdi": True}, "longhorn")
 
 

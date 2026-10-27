@@ -21,7 +21,7 @@ import homestead_capacity_review as CAPACITY_REVIEW
 import homestead_cluster_shutdown as CLUSTER_SHUTDOWN
 import homestead_container_rebalance as CREBALANCE
 import homestead_host_console as HOST_CONSOLE
-import homestead_imports as IMPORTS
+import homestead_image_cache as IMAGES
 import homestead_housekeeping as HOUSEKEEPING
 import homestead_leader as LEADER
 import homestead_lhrebuild as LHREBUILD
@@ -222,7 +222,7 @@ def _detached_copies_loop():
         except Exception as error:
             print(f"detached volume copies not checked: {str(error)[:160]}", flush=True)
         try:
-            IMPORTS.tick()
+            IMAGES.tick()
         except Exception as error:
             print(f"image scans and import clean-up not done: {str(error)[:160]}", flush=True)
 

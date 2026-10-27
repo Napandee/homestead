@@ -33,6 +33,8 @@ SPLITS = {
     "homestead_lifecycle": ("homestead_workload_edit", "homestead_node_actions"),
     "homestead_vms": ("homestead_vm_list", "homestead_vm_edit"),
     "homestead_updates": ("homestead_update_registry", "homestead_update_checks", "homestead_update_rollouts"),
+    "homestead_imports": ("homestead_container_import", "homestead_image_cache", "homestead_scheduled_jobs",
+                          "homestead_vm_create"),
 }
 
 # What a module handed to bind() reads through it, by holder: the files and how
@@ -49,6 +51,8 @@ HOLDERS = {
                              ("homestead_self_address.py", r"(?<![\w.])network\.(\w+)")),
     # ... and homestead_updates to automatic updates.
     "homestead_updates": (("homestead_autoupdate.py", r"(?<![\w.])updates\.(\w+)"),),
+    # ... and homestead_imports to the Unraid VM import.
+    "homestead_imports": (("homestead_unraid_vms.py", r"(?<![\w.])IMP\.(\w+)"),),
 }
 
 # The names a split module still offers of its parts, for its HOLDERS.
@@ -60,6 +64,8 @@ INTERFACE = {
     "homestead_networking": ("create_service", "inventory", "service_plan", "servicelb_present",
                              "set_default_vip"),
     "homestead_updates": ("_pod_containers", "commit_prepared", "prepare_update", "rollback"),
+    "homestead_imports": ("VM_DISK_LABEL", "_get_or_none", "_recheck_vm_creation", "_required_name", "commit_vm",
+                          "prepare_vm", "vm_disk_import_plan"),
 }
 
 
@@ -100,7 +106,8 @@ class SplitReexportTests(unittest.TestCase):
 
     def test_the_interface_is_exactly_what_the_holders_read(self):
         for old, parts in SPLITS.items():
-            moved = set().union(*(vars(importlib.import_module(part)) for part in parts))
+            moved = {name for part in parts for name, value in vars(importlib.import_module(part)).items()
+                     if not isinstance(value, type(sys))}
             with self.subTest(old):
                 self.assertEqual(sorted(INTERFACE.get(old, ())), sorted(holder_reads(old) & moved))
 

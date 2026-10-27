@@ -6,7 +6,7 @@ import test_vm_edit as edit_fixtures
 import test_vm_create as create_fixtures
 import homestead_vm_list as VM_LIST
 import homestead_vm_edit as VM_EDIT
-import homestead_imports as IMP
+import homestead_vm_create as VM_CREATE
 import homestead_vm_network as NETWORK
 
 
@@ -94,7 +94,7 @@ class VMIsolatedCreateTests(unittest.TestCase):
 
     def test_isolated_create_has_no_mac_or_automatic_interface_on_all_platforms(self):
         for platform in (create_fixtures.HARVESTER, create_fixtures.K3S_CDI, create_fixtures.K3S_BARE):
-            with self.subTest(platform=platform), mock.patch.object(IMP, "_vm_mac") as mac:
+            with self.subTest(platform=platform), mock.patch.object(VM_CREATE, "_vm_mac") as mac:
                 self.sent.clear()
                 result = self.create(platform, "storage", isolated=True)
                 spec = self.vm()["spec"]["template"]["spec"]

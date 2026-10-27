@@ -8,6 +8,7 @@ import test_rollout_capacity as fixtures
 import server
 import homestead_deploy_manifests as MANIFESTS
 import homestead_imports as imports
+import homestead_container_import as CONTAINER_IMPORT
 import homestead_import_guard as guard
 import homestead_place as place
 from fixtures_source import source
@@ -107,7 +108,7 @@ class ImportCapacityTests(unittest.TestCase):
                 writes.assert_not_called()
 
     def test_the_default_namespace_uses_the_sources_own_password(self):
-        prepared = imports.prepare_import(dict(self.body))
+        prepared = CONTAINER_IMPORT.prepare_import(dict(self.body))
         ref = prepared["job"]["spec"]["template"]["spec"]["containers"][0]["env"][0]["valueFrom"]["secretKeyRef"]
         self.assertEqual("source-credentials", ref["name"])
         self.assertIsNone(prepared["source_secret"])
@@ -293,7 +294,7 @@ class ImportInterlockTests(unittest.TestCase):
         with mock.patch.object(imports, "create_pvc") as pvc, \
              mock.patch.object(imports, "ksend", side_effect=OSError("conflict")) as send:
             with self.assertRaises(OSError):
-                imports.commit_import(prepared)
+                CONTAINER_IMPORT.commit_import(prepared)
         pvc.assert_called_once()
         self.assertEqual(1, send.call_count)
         self.assertEqual("POST", send.call_args.args[0])
@@ -305,9 +306,9 @@ class ImportInterlockTests(unittest.TestCase):
             return copy.deepcopy(self.job if "/jobs/" in path else self.dep)
         with mock.patch.object(imports, "kget", side_effect=get), \
              mock.patch.object(imports, "ksend") as send, \
-             mock.patch.object(imports, "_stop_job_pods", return_value=[]), \
-             mock.patch.object(imports, "_daemonset_exists", return_value=False):
-            imports.delete_import("homestead-import-app")
+             mock.patch.object(CONTAINER_IMPORT, "_stop_job_pods", return_value=[]), \
+             mock.patch.object(CONTAINER_IMPORT, "_daemonset_exists", return_value=False):
+            CONTAINER_IMPORT.delete_import("homestead-import-app")
         first = send.call_args_list[0]
         self.assertEqual("PUT", first.args[0])
         meta = first.args[2]["metadata"]
@@ -320,9 +321,9 @@ class ImportInterlockTests(unittest.TestCase):
         self.job["status"] = {"conditions":[{"type":"Failed", "status":"True"}]}
         with mock.patch.object(imports, "kget", return_value=self.job), \
              mock.patch.object(imports, "ksend") as send, \
-             mock.patch.object(imports, "_stop_job_pods", return_value=[]), \
-             mock.patch.object(imports, "_daemonset_exists", return_value=False):
-            imports.delete_import("homestead-import-app")
+             mock.patch.object(CONTAINER_IMPORT, "_stop_job_pods", return_value=[]), \
+             mock.patch.object(CONTAINER_IMPORT, "_daemonset_exists", return_value=False):
+            CONTAINER_IMPORT.delete_import("homestead-import-app")
         self.assertEqual(["DELETE"], [c.args[0] for c in send.call_args_list])
 
 

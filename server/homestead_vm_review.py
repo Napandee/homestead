@@ -13,6 +13,7 @@ import urllib.error
 
 import homestead_capacity_review as CAPACITY_REVIEW
 import homestead_imports as IMP
+import homestead_vm_create as VM_CREATE
 import homestead_ipam as IPAM
 import homestead_isos as ISOS
 import homestead_k3scluster as K3SC
@@ -145,7 +146,7 @@ def vm_create_configuration(body, *, preview=False):
     if cfg.get("isolated") is not True and not cfg.get("mac"):
         if not preview:
             raise ValueError("Review VM creation first so its generated MAC is fixed")
-        cfg["mac"] = IMP._vm_mac()
+        cfg["mac"] = VM_CREATE._vm_mac()
     if cfg.get("store_id"):
         source = VMSTORE.source_for(str(cfg["store_id"]))
         cfg["image_id"], cfg["image_url"] = source.get("image_id", ""), source.get("image_url", "")
@@ -217,8 +218,8 @@ def vm_creation_capacity(prepared):
 
 def preview_vm_create(body):
     cfg = vm_create_configuration(body, preview=True)
-    prepared = IMP.prepare_vm(cfg, PLATFORM.detect(), cfg["storage_class"])
-    IMP._recheck_vm_creation(prepared)
+    prepared = VM_CREATE.prepare_vm(cfg, PLATFORM.detect(), cfg["storage_class"])
+    VM_CREATE._recheck_vm_creation(prepared)
     plan, claims, context = vm_creation_capacity(prepared)
     if cfg.get("static_ip"):
         problem = vm_address_problem(str(cfg["static_ip"].get("address") or "").strip())
@@ -233,8 +234,8 @@ def preview_vm_create(body):
 
 def reviewed_vm_create(body):
     cfg = vm_create_configuration(body)
-    prepared = IMP.prepare_vm(cfg, PLATFORM.detect(), cfg["storage_class"])
-    IMP._recheck_vm_creation(prepared)
+    prepared = VM_CREATE.prepare_vm(cfg, PLATFORM.detect(), cfg["storage_class"])
+    VM_CREATE._recheck_vm_creation(prepared)
     plan, _, context = vm_creation_capacity(prepared)
     CAPACITY_REVIEW.enforce(cfg, plan, context)
     def check_address():
@@ -261,7 +262,7 @@ def reviewed_vm_create(body):
                 raise CAPACITY_REVIEW.Rejected("VM creation dependencies changed during image preparation; inspect retained resources and review again", fresh)
         CAPACITY_REVIEW.enforce(cfg, fresh, context)
     result = VM_MUTATION_JOB.dispatch("vm-create", cfg, cfg["namespace"], cfg["name"], None, OPS, IMP.ksend,
-        lambda send: IMP.commit_vm(prepared, before_save=admit_after_preparation, send=send))
+        lambda send: VM_CREATE.commit_vm(prepared, before_save=admit_after_preparation, send=send))
     if result.get("address"):
         try:
             IPAM.save_record({"ip": result["address"], "name": cfg["name"], "kind": "static",
@@ -386,7 +387,7 @@ def vm_cluster_configuration(body, *, preview=False):
     cfg["name"] = built["name"]
     if preview:
         cfg["review_id"] = secrets.token_hex(16)
-        cfg["macs"] = {node["name"]: IMP._vm_mac() for node in built["nodes"]}
+        cfg["macs"] = {node["name"]: VM_CREATE._vm_mac() for node in built["nodes"]}
     if not re.fullmatch(r"[a-f0-9]{32}", str(cfg.get("review_id") or "")):
         raise ValueError("Review the VM cluster first to freeze its generated identifiers")
     if not isinstance(cfg.get("macs"), dict) or set(cfg["macs"]) != {node["name"] for node in built["nodes"]}:
@@ -431,9 +432,9 @@ def prepare_vm_cluster(cfg):
     platform = PLATFORM.detect()
     prepared = []
     for config in batch["configs"]:
-        item = IMP.prepare_vm(config, platform, cfg["storage_class"])
+        item = VM_CREATE.prepare_vm(config, platform, cfg["storage_class"])
         K3SC.HEALTH.pin(item, batch["guest_health"])
-        IMP._recheck_vm_creation(item)
+        VM_CREATE._recheck_vm_creation(item)
         claims = VM_CLAIMS.plans(item["vm"], read, item["claims"], item["downloads"])
         VM_CLAIMS.pin(item["vm"], claims, item["claims"])
         prepared.append(item)
@@ -460,7 +461,7 @@ def reviewed_vm_cluster(body):
         # whose launchers have not appeared in Kubernetes yet.
         for item, config in zip(prepared, batch["configs"]):
             if item["name"] not in receipts:
-                IMP._recheck_vm_creation(item)
+                VM_CREATE._recheck_vm_creation(item)
                 problem = vm_address_problem(config["static_ip"]["address"])
                 if problem:
                     raise ValueError(problem)
@@ -490,7 +491,7 @@ def reviewed_vm_cluster(body):
             VM_CLAIMS.pin(resolved["vm"], claims, resolved["claims"])
             prepared[index] = resolved
             admit()
-        result = IMP.commit_vm(prepared[index], before_save=after_images, send=send)
+        result = VM_CREATE.commit_vm(prepared[index], before_save=after_images, send=send)
         if result.get("address"):
             try:
                 IPAM.save_record({"ip": result["address"], "name": config["name"], "kind": "static",
