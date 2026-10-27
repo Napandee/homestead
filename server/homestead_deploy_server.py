@@ -21,6 +21,7 @@ import urllib.request, urllib.parse, urllib.error
 import homestead_capacity_review as CAPACITY_REVIEW
 import homestead_compose as COMPOSE
 import homestead_deploy as DEPLOY
+import homestead_deploy_manifests as MANIFESTS
 import homestead_env_secrets as ENVSEC
 import homestead_hardware as HW
 import homestead_helm as HELM
@@ -82,7 +83,7 @@ def additional_container_configs(cfg):
         if not isinstance(privileges, dict) or set(privileges) - {"privileged", "cap_add", "tun"}:
             raise ValueError("invalid additional container privileges")
         item.update(privileges)
-        item = ensure_profile_compatible(DEPLOY.analyze_deploy_intent(item))
+        item = ensure_profile_compatible(MANIFESTS.analyze_deploy_intent(item))
         result.append(item)
     return result
 
@@ -145,7 +146,7 @@ def import_capacity_plan(body):
 
 def capacity_manifest(config, existing=None):
     """Construct a read-only manifest and planned claims without provisioning."""
-    cfg = DEPLOY.analyze_deploy_intent(copy.deepcopy(config))
+    cfg = MANIFESTS.analyze_deploy_intent(copy.deepcopy(config))
     ns = _dns_name(cfg.get("namespace") or DEFAULT_NS, "namespace")
     cfg["namespace"] = ns
     joining = cfg.get("target_mode") == "existing"
@@ -153,9 +154,9 @@ def capacity_manifest(config, existing=None):
         target = _dns_name(cfg.get("target_workload"), "existing workload")
         if existing is None:
             existing = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{target}")
-        dep, _ = DEPLOY.build_sidecar_deployment(cfg, existing)
+        dep, _ = MANIFESTS.build_sidecar_deployment(cfg, existing)
     elif cfg.get("target_mode", "new") == "new":
-        dep, _ = DEPLOY.build_deployment(cfg)
+        dep, _ = MANIFESTS.build_deployment(cfg)
     else:
         raise ValueError("deployment target must be new or existing")
     claims = {row["name"]: row for row in new_claims(deployment_volumes(cfg))}
@@ -194,7 +195,7 @@ def deploy_capacity_plan(config, existing=None):
 
 def reviewed_deploy(b):
     """Deploy/App Store endpoint guard; Compose needs a whole-batch review."""
-    b = ensure_profile_compatible(DEPLOY.analyze_deploy_intent(copy.deepcopy(b)))
+    b = ensure_profile_compatible(MANIFESTS.analyze_deploy_intent(copy.deepcopy(b)))
     HOSTACCESS.require_cfg([b, *additional_container_configs(b)])
     if b.get("target_mode", "new") not in ("new", "existing"):
         raise ValueError("deployment target must be new or existing")
@@ -250,7 +251,7 @@ def compose_preparation(b):
     for name in report["order"]:
         if name not in rows:
             continue
-        cfg = ensure_profile_compatible(DEPLOY.analyze_deploy_intent(copy.deepcopy(rows[name]["config"])))
+        cfg = ensure_profile_compatible(MANIFESTS.analyze_deploy_intent(copy.deepcopy(rows[name]["config"])))
         guard_managed_smb(cfg.get("namespace") or DEFAULT_NS, cfg.get("workload_name") or cfg.get("name"))
         cfg, dep, pending, _ = capacity_manifest(cfg)
         for claim, descriptor in pending.items():

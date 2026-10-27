@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_updates as UPDATES
 import homestead_volowner as VOLOWNER
 import server
+import homestead_deploy_manifests as MANIFESTS
 
 
 def layer(*entries):
@@ -109,7 +110,7 @@ class DeploymentTests(unittest.TestCase):
                            {"type": "pvc", "source": "old", "path": "/old"}],
                "volume_owners": {"/app/data": [1000, 1000, 0o755]}}
         with mock.patch.object(server.HW, "features", return_value=[]):
-            dep, _ = server.DEPLOY.build_deployment(cfg)
+            dep, _ = MANIFESTS.build_deployment(cfg)
 
         spec = dep["spec"]["template"]["spec"]
         init = spec["initContainers"][0]
@@ -123,7 +124,7 @@ class DeploymentTests(unittest.TestCase):
         cfg = {"name": "web", "image": "nginx", "namespace": "lab",
                "volumes": [{"type": "pvc", "source": "web", "path": "/data", "create": True}]}
         with mock.patch.object(server.HW, "features", return_value=[]):
-            dep, _ = server.DEPLOY.build_deployment(cfg)
+            dep, _ = MANIFESTS.build_deployment(cfg)
         self.assertNotIn("initContainers", dep["spec"]["template"]["spec"])
 
 

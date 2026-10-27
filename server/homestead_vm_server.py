@@ -12,7 +12,7 @@ object, for _cache)."""
 import time
 import homestead_api_v1 as API_V1
 import homestead_cancel as CANCEL
-import homestead_deploy as DEPLOY
+import homestead_deploy_appstore as APPSTORE
 import homestead_helm as HELM
 import homestead_icons as ICONS
 import homestead_imports as IMP
@@ -102,7 +102,7 @@ def logo_choices(ns, name, term, kind="workload"):
         (w for w in cached("wl", 5, WORKLOADS.get_workloads) if w.get("ns") == ns and w.get("name") == name), None)
     images = (workload or {}).get("images") or []
     chart = helm_chart_logos().get((ns, (workload or {}).get("helm_release"))) if workload else None
-    return {"tiles": LOGOS.suggest(DEPLOY.fetch_appstore(), images, term if term is not None else name, DEPLOY.search_appstore,
+    return {"tiles": LOGOS.suggest(APPSTORE.fetch_appstore(), images, term if term is not None else name, APPSTORE.search_appstore,
                                    chart=chart), "images": images}
 
 
@@ -237,7 +237,7 @@ def _logos(request):
 
 def _logos_missing(request):
     try:
-        apps = DEPLOY.fetch_appstore()
+        apps = APPSTORE.fetch_appstore()
     except Exception as e:
         return MODULE_ROUTES.Reply(502, {"error": f"app feed unavailable: {e}"})
     return {"apps": LOGOS.missing(cached("wl", 5, WORKLOADS.get_workloads), apps, helm_chart_logos())}

@@ -7,6 +7,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import server
+import homestead_deploy_manifests as MANIFESTS
 import homestead_network_services as SVC
 import homestead_place as place
 import homestead_rollout_capacity as rollout
@@ -82,7 +83,7 @@ class RolloutCapacityTests(unittest.TestCase):
             "status": {"phase": "Bound"}}
 
     def reviewed(self):
-        cfg = server.DEPLOY.analyze_deploy_intent(copy.deepcopy(self.cfg))
+        cfg = MANIFESTS.analyze_deploy_intent(copy.deepcopy(self.cfg))
         cfg["capacity_token"] = review.issue(cfg, server.DEPLOY_ROUTES.rollout_review_context(self.current))
         cfg["confirm_capacity"] = True
         return cfg

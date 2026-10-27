@@ -3,9 +3,9 @@
 What a deploy config implies (analyze_deploy_intent), the Deployment and
 Service for a new app, one with extra containers, a container added to an
 existing app, and the tier a new app starts in. Moved unchanged from
-homestead_deploy (#623); import that module, which re-exports these names.
-Names server.py binds on homestead_deploy are read through it (D.x), so a
-replacement there still applies.
+homestead_deploy (#623): read and replace these names here. Names server.py
+binds on homestead_deploy are read through it (D.x), so a replacement there
+still applies.
 """
 import json
 import re

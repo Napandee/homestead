@@ -10,6 +10,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
 import server  # noqa: E402
+import homestead_deploy_manifests as MANIFESTS  # noqa: E402
 import homestead_affinity as AFFINITY  # noqa: E402
 
 PLACEMENT = {"spread": "prefer",
@@ -44,7 +45,7 @@ class DeployPlacementTests(unittest.TestCase):
         return {"name": "app", "image": "app:1", "namespace": "lab", "ports": [], "volumes": [], "hardware": [], **extra}
 
     def build(self, cfg):
-        return server.DEPLOY.build_deployment(cfg)[0]
+        return MANIFESTS.build_deployment(cfg)[0]
 
     @staticmethod
     def placed(dep):
@@ -117,7 +118,7 @@ class DeployPlacementTests(unittest.TestCase):
         cfg = {"name": "helper", "image": "example/helper", "namespace": "lab", "target_workload": "media",
                "target_mode": "existing", "network_mode": "internal", "ports": [], "volumes": [], "hardware": [],
                "placement": PLACEMENT, "node": "node-1", "failover": "wait"}
-        updated, _ = server.DEPLOY.build_sidecar_deployment(cfg, copy.deepcopy(current))
+        updated, _ = MANIFESTS.build_sidecar_deployment(cfg, copy.deepcopy(current))
         pod = updated["spec"]["template"]["spec"]
         self.assertNotIn("affinity", pod)
         self.assertNotIn(AFFINITY.RULES, updated["metadata"].get("annotations") or {})

@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 
 import homestead_imports as imports
 import server
+import homestead_deploy_manifests as MANIFESTS
 from fixtures_source import source
 
 
@@ -66,7 +67,7 @@ class ImportManifestTests(unittest.TestCase):
         server.HW.features = self.features
 
     def test_one_claim_backs_every_folder_of_the_workload(self):
-        deployment, _ = server.DEPLOY.build_deployment({
+        deployment, _ = MANIFESTS.build_deployment({
             "name": "plex", "workload_name": "plex", "container_name": "plex",
             "image": "plex:1", "namespace": "lab",
             "volumes": [
@@ -83,7 +84,7 @@ class ImportManifestTests(unittest.TestCase):
         self.assertEqual({spec["volumes"][0]["name"]}, {m["name"] for m in mounts})
 
     def test_a_mapping_without_a_folder_has_no_sub_path(self):
-        deployment, _ = server.DEPLOY.build_deployment({
+        deployment, _ = MANIFESTS.build_deployment({
             "name": "app", "workload_name": "app", "container_name": "app",
             "image": "app:1", "namespace": "lab",
             "volumes": [{"path": "/config", "source": "app-appdata", "type": "pvc", "sub_path": ""}]})
@@ -598,7 +599,7 @@ class FsGroupTests(unittest.TestCase):
         server.HW.features = self.features
 
     def test_an_owner_group_becomes_the_pod_fs_group(self):
-        deployment, _ = server.DEPLOY.build_deployment({
+        deployment, _ = MANIFESTS.build_deployment({
             "name": "mq", "workload_name": "mq", "container_name": "mq", "image": "mosquitto:2",
             "namespace": "lab", "fs_group": 1883,
             "volumes": [{"path": "/mosquitto/data", "source": "mq-appdata", "type": "pvc"}]})
@@ -607,7 +608,7 @@ class FsGroupTests(unittest.TestCase):
         self.assertEqual(1883, spec["securityContext"]["fsGroup"])
 
     def test_no_owner_leaves_the_pod_security_context_alone(self):
-        deployment, _ = server.DEPLOY.build_deployment({
+        deployment, _ = MANIFESTS.build_deployment({
             "name": "app", "workload_name": "app", "container_name": "app", "image": "app:1",
             "namespace": "lab", "volumes": []})
 

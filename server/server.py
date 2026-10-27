@@ -480,7 +480,7 @@ import homestead_signins as SIGNINS
 import homestead_config_backup as CONFIG
 import homestead_move_source as MOVE_SOURCE
 import homestead_move_engine as MOVE_ENGINE
-import homestead_deploy as DEPLOY
+import homestead_deploy as DEPLOY, homestead_deploy_manifests as DEPLOY_MANIFESTS
 import homestead_workloads as WORKLOADS
 import homestead_onboard as ONBOARD
 import homestead_cfaccess as CFACCESS
@@ -550,7 +550,7 @@ def _resolve_storage_class():
 
 STORAGE_CLASS = _resolve_storage_class()
 LC.bind(kget, ksend, SYS_NS, _cache, HW.features, create_pvc, STORAGE_CLASS)
-IMP.bind(kget, ksend, create_pvc, DEPLOY.build_deployment, DEFAULT_NS, _cache, HW.features)
+IMP.bind(kget, ksend, create_pvc, DEPLOY_MANIFESTS.build_deployment, DEFAULT_NS, _cache, HW.features)
 IMP.SCAN_DIR = DATA_DIR       # each node's full image list, kept for every replica
 AUTH.bind(kget, _auth_ksend, DEFAULT_NS)
 CAPACITY_REVIEW.bind(AUTH.review_signing_key)
@@ -952,7 +952,7 @@ SELF_HEALTH.bind(lambda *a, **k: KUBE_HELPERS.kget(*a, **k), lambda *a, **k: KUB
 VOLUMES.bind(kget, ksend, LH_VOLUMES.snapshots, LH_BACKUPS.backups, _cache, SYS_NS, DEFAULT_NS)
 SHARES.bind(kget, ksend, create_pvc, SMB_NAMESPACE, _cache)
 SHARES.install = SHARE_SERVERS.install_samba
-SHARE_SERVERS.bind(kget, ksend, lambda cfg: DEPLOY.build_deployment(cfg), SMB_NAMESPACE, _cache,
+SHARE_SERVERS.bind(kget, ksend, lambda cfg: DEPLOY_MANIFESTS.build_deployment(cfg), SMB_NAMESPACE, _cache,
                    shared_storage_classes, lambda: STORAGE_CLASS, share_storage_options)
 NETWORK.bind(kget, ksend, SYS_NS, DEFAULT_NS, LB_IP, lambda ns, name: OVERVIEW_ROUTES.guard_managed_smb(ns, name), lambda: NODES.node_temps())
 FLOW.bind(lambda path: KUBE_HELPERS.kget(path), SYS_NS, lambda annotations: display_icon(annotations), STORAGE._moving_copy,
