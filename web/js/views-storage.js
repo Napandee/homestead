@@ -499,21 +499,55 @@ function otherVolumesHtml(rows) {
         need: "admin", danger: true, tip: "Review what uses it and what would be lost before deleting" }], { shown: 0, label: `Actions for ${r.name}` })}</td></tr>`).join("")}</tbody></table></div></div>`;
 }
 
+/* The page is drawn as its reads return, not once all of them have (#705).
+   Every read starts at once; the page is drawn when the volumes answer, and
+   each other part - the totals, the forecast, old copies, other volumes - fills
+   in when its own read does. Until then it says it is being read. A refresh
+   keeps each part's last answer on screen until the new one arrives; another
+   visit to the page starts afresh. Parts that answer together are drawn in one
+   paint, and a load overtaken by a newer one draws nothing. */
+const STORAGE_PARTS = [
+  ["st", "/api/storage", "totals", null], ["classes", "/api/storage/classes", "storage classes", []],
+  ["v2", "/api/storage/v2", "the V2 engine", null], ["cap", "/api/longhorn/capacity", "capacity", null],
+  ["forecast", "/api/storage/forecast", "the forecast", null], ["oldCopies", "/api/volumes/old-copies", "old copies", []],
+  ["others", "/api/volumes/other", "other volumes", []]];
+let storageLoad = { id: 0, token: null, parts: {} };
+const partReading = what => `<div class="empty small"><span class="spin2"></span> Reading ${what}…</div>`;
+
 async function viewStorage() {
   if (platformLacks("longhorn", "Volumes")) return;
+  const token = window.NAV_TOKEN;
+  // Same visit: last answers stay until replaced. Another visit: nothing kept.
+  const kept = storageLoad.token === token ? storageLoad.parts : {};
+  const load = storageLoad = { id: storageLoad.id + 1, token, parts: { ...kept } };
+  const current = () => storageLoad === load;
   // A part of the page that could not be read is named above the page, not
   // silently left out (#620): no old copies listed is not no old copies.
   const missed = [];
-  const part = (path, label, fallback) => api(path).catch(e => { missed.push(`${label}: ${e.message}`); return fallback; });
-  const [v, st, classes, v2, cap, forecast] = await Promise.all([api("/api/volumes"), part("/api/storage", "totals", null),
-    part("/api/storage/classes", "storage classes", []), part("/api/storage/v2", "the V2 engine", null),
-    part("/api/longhorn/capacity", "capacity", null), part("/api/storage/forecast", "the forecast", null)]);
-  STATE.data.forecast = forecast;
-  const [allOldCopies, allOthers] = await Promise.all([part("/api/volumes/old-copies", "old copies", []),
-    part("/api/volumes/other", "other volumes", [])]);
+  let volumes = null, queued = null;
+  const draw = () => {
+    if (queued || !current() || !volumes) return;
+    queued = new Promise(resolve => setTimeout(() => { queued = null; if (current()) storagePaint(volumes, load.parts, missed); resolve(); }, 0));
+  };
+  const parts = STORAGE_PARTS.map(([key, path, label, fallback]) => api(path)
+    .catch(e => { missed.push(`${label}: ${e.message}`); return fallback; })
+    .then(answer => { load.parts[key] = answer; draw(); }));
+  volumes = await api("/api/volumes");
+  if (!current()) return;
+  draw();
+  // Settled when the whole page is drawn, as before, for whoever waits on it.
+  await Promise.all(parts);
+  await queued;
+}
+
+function storagePaint(v, parts, missed) {
+  const has = key => key in parts;
+  const { st, classes, v2, cap, forecast } = parts;
+  const allOldCopies = parts.oldCopies || [], allOthers = parts.others || [];
+  if (has("forecast")) STATE.data.forecast = forecast;
   STATE.data.lhcap = cap || STATE.data.lhcap;
-  STATE.data.storageClasses = classes;
-  STATE.data.v2 = v2;
+  if (has("classes")) STATE.data.storageClasses = classes;
+  if (has("v2")) STATE.data.v2 = v2;
   STATE.data.vols = v;
   const q = STATE.q.toLowerCase();
   // A search narrows every list on the page, not only Longhorn's.
@@ -531,7 +565,8 @@ async function viewStorage() {
         { label: "Storage classes", icon: "disk", run: "settingsTab('hardware');go('settings')", tip: "What new volumes are made from: in Settings › Hardware and storage" }])}
       <button class="btn pri" data-need="operator" onclick="volumeCreate()">＋ Create volume</button>`)}
   ${UI.notices(missed.map(text => ["warn", text]), "Parts of this page could not be read")}
-  ${st ? summaryLine("volumes", [
+  ${!has("st") ? summaryLine("volumes", [`<span class="dim small"><span class="spin2"></span> Reading the totals…</span>`])
+  : st ? summaryLine("volumes", [
       `<b>${st.avail_gb} GiB</b> free of ${st.cap_gb}`, `<b>${st.provisioned_gb} GiB</b> provisioned`,
       `${UI.chip(`${st.healthy} healthy`, "ok")}${st.degraded ? ` ${UI.chip(`${st.degraded} degraded`, "warn")}` : ""}${st.faulted ? ` ${UI.chip(`${st.faulted} faulted`, "bad")}` : ""}`,
       `${st.attached} of ${st.volumes} attached`],
@@ -552,7 +587,7 @@ async function viewStorage() {
       <div class="csub" style="margin-top:10px">${st.attached} attached of ${st.volumes}</div></div>
     ${lhCapacityCard(cap, st)}
   </div>`, "Per host") : ""}
-  ${forecastCard(forecast)}
+  ${has("forecast") ? forecastCard(forecast) : `<div class="card flat forecast-card"><div class="ctitle">Filling up</div>${partReading("the forecast")}</div>`}
   <div class="card flat pad0"><div class="tblwrap voltable"><table data-sort="volumes" class="tbl dense"><thead><tr>
    <th>Volume</th><th>Attached to</th><th>Health</th><th>Mode</th><th>Usage</th><th data-nosort>Last used</th><th></th>
    </tr></thead><tbody>${rows.map(x => `<tr data-vol="${esc(x.name)}"${clusterAttr(x)}>
