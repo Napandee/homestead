@@ -4,7 +4,7 @@ them - read from the cluster as it is now."""
 import homestead_hardware as HW
 import homestead_longhorn_jobs as JOBS
 import homestead_names as NAMES
-import homestead_networking as NETWORK
+import homestead_network_inventory as INV
 import homestead_routes
 import homestead_start_order as START_ORDER
 import homestead_vms as VMS
@@ -156,7 +156,7 @@ def get_flow2():
     # one it carries: a VIP kube-vip answers for but never recorded is where
     # the app is meant to be, and the page says why it is not reachable there.
     try:
-        network = homestead_routes.cached("network", 5, NETWORK.inventory)
+        network = homestead_routes.cached("network", 5, INV.inventory)
     except Exception:
         network = {}
     places = network.get("addresses") or {"nodes": [], "addresses": []}

@@ -190,7 +190,8 @@ TUNNEL_IMAGES = ("cloudflare/cloudflared", "tailscale/tailscale")
 def welcome(role="admin"):
     """The first-run checklist: the few settings a new cluster wants, each
     with whether it is done. Shown to an admin until one says it is done."""
-    import homestead_longhorn_target as BACKUP_TARGET, homestead_networking as NETWORK, homestead_os_rollout as OS_ROLLOUT
+    import homestead_longhorn_target as BACKUP_TARGET, homestead_network_inventory as INV, homestead_os_rollout as OS_ROLLOUT
+    import homestead_vip_registry as REG
     import homestead_platform as PLATFORM, homestead_probe as PROBE, homestead_self_address as SELF_ADDRESS
     try:
         with open(os.path.join(DATA_DIR, "welcome.json"), encoding="utf-8") as handle:
@@ -200,9 +201,9 @@ def welcome(role="admin"):
     p = PLATFORM.detect() or {}
     steps = {}
     try:
-        address = SELF_ADDRESS.report(homestead_routes.cached("network", 5, NETWORK.inventory))
+        address = SELF_ADDRESS.report(homestead_routes.cached("network", 5, INV.inventory))
         steps["address"] = {"done": address["on_vip"], "url": address["url"], "shared_vip": address["shared_vip"],
-                            "vips": len(NETWORK.registered())}
+                            "vips": len(REG.registered())}
     except Exception as error:
         steps["address"] = {"done": False, "error": str(error)[:160]}
     steps["probe"] = {"done": bool(PROBE.installed())}
@@ -225,7 +226,8 @@ def state(user, role):
     import homestead_api_keys as API_KEYS, homestead_auth as AUTH, homestead_disks as DISKS
     import homestead_fleet as FLEET, homestead_host_console as HOST_CONSOLE, homestead_host_os as HOST_OS
     import homestead_imports as IMP, homestead_ipam as IPAM, homestead_lifecycle as LC, homestead_longhorn_target as BACKUP_TARGET
-    import homestead_networking as NETWORK, homestead_os_rollout as OS_ROLLOUT, homestead_platform as PLATFORM
+    import homestead_network_inventory as INV, homestead_os_rollout as OS_ROLLOUT, homestead_platform as PLATFORM
+    import homestead_vip_registry as REG
     import homestead_push as PUSH, homestead_self_address as SELF_ADDRESS
     cached = homestead_routes.cached
     p = PLATFORM.detect() or {}
@@ -276,9 +278,9 @@ def state(user, role):
         step("clocks", clocks)
 
         def address():
-            report = SELF_ADDRESS.report(cached("network", 5, NETWORK.inventory))
+            report = SELF_ADDRESS.report(cached("network", 5, INV.inventory))
             return {"done": bool(report["on_vip"]), "applies": True, "url": report["url"], "service_url": report.get("service_url", ""),
-                    "shared_vip": report.get("shared_vip"), "vips": len(NETWORK.registered()),
+                    "shared_vip": report.get("shared_vip"), "vips": len(REG.registered()),
                     "load_balancer": p.get("load_balancer", ""), "harvester": bool(p.get("harvester"))}
         step("address", address)
 

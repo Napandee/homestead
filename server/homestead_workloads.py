@@ -27,7 +27,8 @@ import homestead_lan as LAN
 import homestead_lifecycle as LC
 import homestead_logsearch as LOGSEARCH
 import homestead_names as NAMES
-import homestead_networking as NETWORK
+import homestead_network_services as SVC
+import homestead_network_inventory as INV
 import homestead_operations as OPS
 import homestead_outage as OUTAGE
 import homestead_place as PLACE
@@ -376,7 +377,7 @@ def get_workloads(pods=None):
             placed = conditions.get("PodScheduled") or {}
             if placed.get("status") == "False" and not p["metadata"].get("deletionTimestamp"):
                 own = []
-                if pspec.get("hostNetwork") and NETWORK.servicelb_present():
+                if pspec.get("hostNetwork") and INV.servicelb_present():
                     wanted = {cp.get("containerPort") for c in pspec.get("containers", []) or []
                               for cp in c.get("ports", []) or []}
                     own = sorted({row["port"] for row in ports if row.get("port") in wanted})
@@ -666,7 +667,7 @@ def edit_capacity_plan(config):
         exposed = [port for container in config.get("containers") or []
                    for port in container.get("ports") or [] if port.get("expose")]
         if exposed and config.get("manage_ports"):
-            NETWORK._ports({"ports": [{"name": port.get("name"), "port": port.get("host") or port.get("container"),
+            SVC._ports({"ports": [{"name": port.get("name"), "port": port.get("host") or port.get("container"),
                                       "target_port": port.get("container"), "protocol": port.get("protocol") or "TCP"}
                                      for port in exposed]})
         plan["container_changes"] = {"added": additions, "removed": removals}

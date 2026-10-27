@@ -64,7 +64,8 @@ VIP_ANNOTATION = "kube-vip.io/loadbalancerIPs"
 TARGET_REQUEST = "homestead.io/backup-target-request"
 _target_lock = threading.RLock()
 import homestead_platform as PLATFORM
-import homestead_networking as NETWORK
+import homestead_network_services as SVC
+import homestead_network_inventory as INV
 import homestead_longhorn as LH
 import homestead_longhorn_target as BACKUP_TARGET
 import homestead_move as MOVE
@@ -423,7 +424,7 @@ VIP_KEYS = ("kube-vip.io/loadbalancerIPs", "metallb.io/loadBalancerIPs", "metall
 
 
 def _shared_plan(port):
-    return NETWORK.service_plan({
+    return SVC.service_plan({
         "namespace": NS, "name": f"{NAME}-plan", "workload": NAME, "type": "LoadBalancer",
         "vip_mode": "shared",
         "ports": [{"port": port, "target_port": "s3", "name": "s3"},
@@ -481,7 +482,7 @@ def deploy(cfg=None):
     if not 1 <= port <= 65534:
         raise ValueError("the backup storage port is between 1 and 65534 (the one above it is its console)")
     if address:
-        NETWORK.check_address(address)
+        INV.check_address(address)
     elif existing and cfg.get("vip_mode") != "shared" and port == _port(existing):
         address = _current_address(existing)
     else:

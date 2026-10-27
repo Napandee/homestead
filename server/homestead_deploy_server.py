@@ -35,7 +35,8 @@ import homestead_move_phases as MOVE_PHASES
 import homestead_move_state as MOVE_STATE
 import homestead_names as NAMES
 import homestead_namespaces as NSMOD
-import homestead_networking as NETWORK
+import homestead_network_services as SVC
+import homestead_network_inventory as INV
 import homestead_operations as OPS
 import homestead_place as PLACE
 import homestead_pullwatch as PULLWATCH
@@ -94,9 +95,9 @@ def deployment_volumes(cfg):
 def prepare_deploy_network(cfg):
     extras = additional_container_configs(cfg)
     if not extras:
-        return NETWORK.prepare_deploy(cfg)
+        return SVC.prepare_deploy(cfg)
     combined = dict(cfg, ports=[port for item in [cfg, *extras] for port in item.get("ports") or []])
-    planned = NETWORK.prepare_deploy(combined)
+    planned = SVC.prepare_deploy(combined)
     return dict(planned, ports=cfg.get("ports") or [])
 
 
@@ -116,7 +117,7 @@ def import_capacity_plan(body):
     cfg = copy.deepcopy(body)
     ns = cfg["namespace"] = import_namespace(body.get("namespace"))
     guard_managed_smb(ns, cfg.get("name"))
-    cfg = NETWORK.prepare_deploy(cfg)  # read-only VIP selection and validation
+    cfg = SVC.prepare_deploy(cfg)  # read-only VIP selection and validation
     prepared = IMP.prepare_import(cfg)
     if prepared["job"] and cfg.get("source_consistency") not in ("stopped", "snapshot"):
         raise ValueError("Choose whether the source writers are stopped or the copied paths are a consistent snapshot")
@@ -223,7 +224,7 @@ def compose_report(b):
     claims = {c["metadata"]["name"] for c in
               ROLLOUT_CAPACITY.items(kget, f"/api/v1/namespaces/{ns}/persistentvolumeclaims")}
     vip_mode = b.get("vip_mode") if b.get("vip_mode") in ("shared", "auto", "nodes") else "shared"
-    if NETWORK.node_addresses_only():
+    if INV.node_addresses_only():
         # On k3s every service shares the nodes' addresses, so ports must differ.
         vip_mode = "shared"
     return COMPOSE.convert(text, b.get("variables") or "", ns, workloads, claims,
@@ -396,7 +397,7 @@ def delete_workload(ns, name):
     # Every Service selecting these pods, not just the one sharing the
     # workload's name: a sidecar or a hand-made listener is named
     # differently and would otherwise keep its VIP port forever.
-    services = set(NETWORK.workload_service_names(ns, name)) | {name}
+    services = set(SVC.workload_service_names(ns, name)) | {name}
     try:
         current = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
     except Exception:
@@ -491,7 +492,7 @@ def apply_reviewed_edit(b, prepared, hold=False):
     address = b.get("address") if isinstance(b.get("address"), dict) else {}
     vip_mode = address.get("vip_mode") or "shared"
     if b.get("manage_ports") or any("expose" in port for port in ports):
-        message = NETWORK.sync_workload_ports(b["ns"], result.get("name") or b["name"], ports,
+        message = SVC.sync_workload_ports(b["ns"], result.get("name") or b["name"], ports,
                                               network_mode=address.get("network_mode") or b.get("network_mode"),
                                               vip_mode={"auto": "automatic"}.get(vip_mode, vip_mode),
                                               vip=address.get("lb_ip", "") if vip_mode == "manual" else "")
@@ -499,7 +500,7 @@ def apply_reviewed_edit(b, prepared, hold=False):
             result["network"] = message
             _cache.pop("network", None)
     if address.get("network_mode") in ("loadbalancer", "internal"):
-        message = NETWORK.set_workload_address(b["ns"], result.get("name") or b["name"], address["network_mode"],
+        message = SVC.set_workload_address(b["ns"], result.get("name") or b["name"], address["network_mode"],
                                                vip_mode, address.get("lb_ip", ""))
         if message:
             result["network"] = "; ".join(filter(None, [result.get("network"), message]))

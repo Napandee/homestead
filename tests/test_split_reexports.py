@@ -27,6 +27,8 @@ SPLITS = {
                               "homestead_move_phases", "homestead_move_actions"),
     "homestead_longhorn": ("homestead_longhorn_jobs", "homestead_longhorn_volumes", "homestead_longhorn_target",
                            "homestead_longhorn_backups", "homestead_longhorn_restore"),
+    "homestead_networking": ("homestead_network_state", "homestead_network_inventory",
+                             "homestead_network_services", "homestead_vip_registry", "homestead_network_vms"),
 }
 
 # What a module handed to bind() reads through it, by holder: the files and how
@@ -37,6 +39,10 @@ HOLDERS = {
     "homestead_longhorn": (("homestead_move_source.py", r"(?<![\w.])LH\.(\w+)"),
                            ("homestead_move_state.py", r"(?<![\w.])LH\.(\w+)"),
                            ("homestead_move_*.py", r"\bSTATE\.LH\.(\w+)")),
+    # ... and homestead_networking to the move engine and to the self address.
+    "homestead_networking": (("homestead_move_state.py", r"(?<![\w.])NETWORK\.(\w+)"),
+                             ("homestead_move_*.py", r"\bSTATE\.NETWORK\.(\w+)"),
+                             ("homestead_self_address.py", r"(?<![\w.])network\.(\w+)")),
 }
 
 # The names a split module still offers of its parts, for its HOLDERS.
@@ -45,6 +51,8 @@ INTERFACE = {
                            "ensure_restore_support", "replace_backup_target_state", "restore_backup",
                            "restore_problem", "restore_support", "transfer_target_state",
                            "validate_restore_class"),
+    "homestead_networking": ("create_service", "inventory", "service_plan", "servicelb_present",
+                             "set_default_vip"),
 }
 
 

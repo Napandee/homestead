@@ -11,6 +11,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_kube as KUBE
 import homestead_objectstore as store
+import homestead_network_services as SVC
 import homestead_longhorn_target as BACKUP_TARGET
 import homestead_network_state as STATE
 
@@ -31,7 +32,7 @@ class ObjectStoreTests(unittest.TestCase):
         self.addCleanup(shared.stop)
         # Homestead's shared address, as Networking would plan it.
         self.plans = []
-        plan = mock.patch.object(store.NETWORK, "service_plan",
+        plan = mock.patch.object(SVC, "service_plan",
                                  side_effect=lambda cfg, **kw: self.plans.append(cfg) or {"vip": "192.0.2.242"})
         plan.start()
         self.addCleanup(plan.stop)
@@ -243,12 +244,12 @@ class ObjectStoreTests(unittest.TestCase):
         self.assertEqual([9000, 9001], [p["port"] for p in self.plans[0]["ports"]])
 
     def test_where_services_go_on_the_nodes_it_goes_there_too(self):
-        store.NETWORK.service_plan.side_effect = lambda cfg, **kw: {"vip": ""}
+        SVC.service_plan.side_effect = lambda cfg, **kw: {"vip": ""}
         store.deploy({"point_longhorn": False})
         self.assertEqual({}, self._sent_service()["metadata"]["annotations"])
 
     def test_a_port_taken_on_the_shared_address_says_so(self):
-        store.NETWORK.service_plan.side_effect = ValueError("192.0.2.242:9000/TCP is already used by lab/minio")
+        SVC.service_plan.side_effect = ValueError("192.0.2.242:9000/TCP is already used by lab/minio")
         with self.assertRaises(ValueError) as caught:
             store.deploy({"point_longhorn": False})
         self.assertIn("lab/minio", str(caught.exception))
@@ -268,7 +269,7 @@ class ObjectStoreTests(unittest.TestCase):
             if cfg["ports"][0]["port"] == 9000:
                 raise ValueError("192.0.2.20:9000/TCP is already used by lab/home-assistant-core")
             return {"vip": "192.0.2.20"}
-        store.NETWORK.service_plan.side_effect = plan
+        SVC.service_plan.side_effect = plan
         with self.assertRaises(ValueError) as caught:
             store.deploy({"point_longhorn": False})
         self.assertIn("home-assistant-core", str(caught.exception))
@@ -524,7 +525,7 @@ class ObjectStoreTests(unittest.TestCase):
         self.assertFalse(store.transfers()["allowed"])
 
     def test_turning_moves_out_on_sets_the_store_up_the_first_time(self):
-        with mock.patch.object(store.NETWORK, "service_plan", return_value={"vip": "192.0.2.242"}),                 mock.patch.object(store, "request_target", return_value={}) as point:
+        with mock.patch.object(SVC, "service_plan", return_value={"vip": "192.0.2.242"}),                 mock.patch.object(store, "request_target", return_value={}) as point:
             store.set_transfers(True, 50)
         point.assert_called_once()
         self.assertIn("/apis/apps/v1/namespaces/lab/deployments", [p for _, p, _ in self.sent])

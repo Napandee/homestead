@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import server
+import homestead_network_inventory as INV
 import homestead_updates as UPDATES
 
 PORTS = "0/1 nodes are available: 1 node(s) didn't have free ports for the requested pod ports. preemption: 0/1 nodes are available: 1 No preemption victims found for incoming pod."
@@ -53,7 +54,7 @@ class PlexOnK3sTests(unittest.TestCase):
         items = {"/apis/apps/v1/deployments": {"items": [dep]}, "/api/v1/pods": {"items": [pod]},
                  "/api/v1/services": {"items": [svc]}}
         with mock.patch.object(server.KUBE_HELPERS, "kget", side_effect=lambda path, **kw: items.get(path, {"items": []})), \
-                mock.patch.object(server.NETWORK, "servicelb_present", return_value=True):
+                mock.patch.object(INV, "servicelb_present", return_value=True):
             plex = server.WORKLOADS.get_workloads()[0]
         self.assertIn("ServiceLB, publishing this app's own Service", plex["pods"][0]["unplaced"])
         self.assertTrue(any("cannot be placed" in p for p in plex["problems"]))

@@ -19,7 +19,7 @@ import urllib.request, urllib.parse, urllib.error
 import homestead_capacity_review as CAPACITY_REVIEW
 import homestead_kube as KUBE
 import homestead_names as NAMES
-import homestead_networking as NETWORK
+import homestead_network_inventory as INV
 import homestead_operations as OPS
 import homestead_routes as MODULE_ROUTES
 import homestead_self as SELF
@@ -100,7 +100,7 @@ def fleet_address():
     """Homestead's web page on its VIP where it has one; else the address
     it started with (on k3s, a node's own)."""
     try:
-        url = SELF_ADDRESS.report(cached("network", 5, NETWORK.inventory)).get("url") or ""
+        url = SELF_ADDRESS.report(cached("network", 5, INV.inventory)).get("url") or ""
     except Exception:
         url = ""
     return url or (f"http://{LB_IP}:8088" if LB_IP else "")

@@ -39,7 +39,8 @@ import homestead_lhrebuild as LHREBUILD
 import homestead_logalerts as LOGALERTS
 import homestead_mcp as MCP
 import homestead_names as NAMES
-import homestead_networking as NETWORK
+import homestead_network_inventory as INV
+import homestead_vip_registry as REG
 import homestead_nodes as NODES
 import homestead_operations as OPS
 import homestead_outage as OUTAGE
@@ -289,7 +290,7 @@ def _alert_sources():
     take("health", lambda: ALERTS.health_facts(MODULE_ROUTES.page("ov", get_overview)))
     take("jobs", lambda: ALERTS.job_facts(OPS.snapshot()))
     take("joins", lambda: ALERTS.join_facts(kget("/api/v1/nodes").get("items", [])))
-    take("addresses", lambda: VIPS.alert_facts(cached("network", 5, NETWORK.inventory).get("addresses")))
+    take("addresses", lambda: VIPS.alert_facts(cached("network", 5, INV.inventory).get("addresses")))
     take("capacity", lambda: LHCAP.alert_facts(MODULE_ROUTES.page("lhcap", LHCAP.status, 15)))
     take("detached-copies", lambda: LHREBUILD.alert_facts(cached("lhrebuild", 30, LHREBUILD.status)))
     take("disks", lambda: DISKS.alert_facts(cached("disks", 15, DISKS.inventory)))
@@ -724,7 +725,7 @@ def get_overview(nodes=None, wl=None, vols=None, pods=None):
         "mem_used_gb": round(muse, 1), "mem_cap_gb": round(mcap, 1),
         "top_cpu": sorted(wl, key=lambda x: -x["cpu"])[:6],
         "top_mem": sorted(wl, key=lambda x: -x["mem_mb"])[:6],
-        "lb_ip": NETWORK.shared_vip(),
+        "lb_ip": REG.shared_vip(),
     }
 
 

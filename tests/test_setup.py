@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_setup as SETUP
 import homestead_share_servers as SERVERS
 import homestead_longhorn_target as BACKUP_TARGET
+import homestead_vip_registry as REG
 
 
 class SetupTests(unittest.TestCase):
@@ -141,7 +142,7 @@ class UniFiSetupStateTests(unittest.TestCase):
         observations = [(SETUP, "DATA_DIR", directory.name), (server.PLATFORM, "detect", {}),
                         (server.LC, "quorum_report", {"total": 1, "members": [], "ready": 1, "can_lose": 0}),
                         (server.SELF_ADDRESS, "report", {"on_vip": False, "url": ""}),
-                        (server.NETWORK, "registered", []), (server.DISKS, "inventory", {"nodes": {}}),
+                        (REG, "registered", []), (server.DISKS, "inventory", {"nodes": {}}),
                         (server, "storage_classes", []), (server, "vm_network_details", []),
                         (SERVERS, "samba_state", {}), (BACKUP_TARGET, "backup_target", {}),
                         (server.OS_ROLLOUT, "settings", {}), (server.AUTH, "list_users", []),
@@ -238,7 +239,7 @@ class NetworkSetupStateTests(unittest.TestCase):
         observations = [(SETUP, "DATA_DIR", directory.name), (server.PLATFORM, "detect", {}),
                         (server.LC, "quorum_report", {"total": 1, "members": [], "ready": 1, "can_lose": 0}),
                         (server.SELF_ADDRESS, "report", {"on_vip": False, "url": ""}),
-                        (server.NETWORK, "registered", []), (server.DISKS, "inventory", {"nodes": {}}),
+                        (REG, "registered", []), (server.DISKS, "inventory", {"nodes": {}}),
                         (server, "storage_classes", []), (BACKUP_TARGET, "backup_target", {}),
                         (server.OS_ROLLOUT, "settings", {}), (server.AUTH, "list_users", []),
                         (server.IPAM, "load", ({}, None)), (server.IMP, "list_sources", []),

@@ -464,7 +464,7 @@ ICONS.bind(DATA_DIR)
 import homestead_volumes as VOLUMES
 import homestead_smart as SMART
 import homestead_shares as SHARES
-import homestead_networking as NETWORK
+import homestead_networking as NETWORK, homestead_vip_registry as VIP_REGISTRY, homestead_network_inventory as NET_INVENTORY, homestead_network_services as NET_SERVICES
 import homestead_flow as FLOW
 import homestead_firewall as FIREWALL
 import homestead_routes as MODULE_ROUTES
@@ -659,7 +659,7 @@ GROUPS.bind(_late(*GROUPS.NEEDS), namespace=DEFAULT_NS, own_group=OWN_GROUP, man
 DEPLOY.bind(_late(*DEPLOY.NEEDS), default_ns=DEFAULT_NS, version=HOMESTEAD_VERSION)
 UPDATES.bind_routes(_late(*UPDATES.ROUTE_NEEDS))
 IMP.bind_routes({**_late("guard_managed_smb", "preview_import", "reviewed_import"),
-                 "workload_service_names": lambda ns, name: NETWORK.workload_service_names(ns, name)})
+                 "workload_service_names": lambda ns, name: NET_SERVICES.workload_service_names(ns, name)})
 ONBOARD.bind(kget, ksend, DEFAULT_NS, OPS)
 # Published through a Cloudflare Tunnel behind Access: name the Access team and
 # application, and a request that came through Cloudflare without Access's
@@ -682,7 +682,7 @@ SELF.bind(kget, ksend, _own_namespace(), HOMESTEAD_VERSION, DATA_DIR)
 DIAGNOSTICS.bind(DATA_DIR, _diagnostic_read, OPS, HOMESTEAD_VERSION, _own_namespace(), os.environ.get("HOSTNAME", ""))
 SHARED.bind(DATA_DIR)
 LEADER.bind(kget, ksend, _own_namespace())
-IPAM.bind(kget, ksend, DEFAULT_NS, lambda: CACHE.cached("network", 5, NETWORK.inventory))
+IPAM.bind(kget, ksend, DEFAULT_NS, lambda: CACHE.cached("network", 5, NET_INVENTORY.inventory))
 HELM.bind(kget, ksend)
 MQTT.bind(kget, ksend, DEFAULT_NS, lambda: mqtt_snapshot(), LEADER.is_leader)
 HISTORY.bind(DATA_DIR)
@@ -992,7 +992,7 @@ CONFIG.bind(kget, ksend, HOMESTEAD_VERSION, [
     {"id": "hardware", "label": "Hardware features", "detail": "Device mappings: iGPU, Coral, USB and the rest",
      "objects": [("configmaps", DEFAULT_NS, HW._hardware_map())]},
     {"id": "vips", "label": "VIPs", "detail": "Your saved VIPs, their labels and the default workload VIP",
-     "objects": [("configmaps", DEFAULT_NS, NETWORK.VIP_MAP)]},
+     "objects": [("configmaps", DEFAULT_NS, VIP_REGISTRY.VIP_MAP)]},
     {"id": "ipam", "label": "IP addresses", "detail": "Subnets, documented addresses, and the UniFi connection",
      "objects": [("configmaps", DEFAULT_NS, IPAM._map()), ("secrets", DEFAULT_NS, IPAM._secret())]},
     {"id": "mqtt", "label": "MQTT", "detail": "The broker, its credentials and what is published",

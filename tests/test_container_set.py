@@ -7,6 +7,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import server
+import homestead_network_services as SVC
 import homestead_lifecycle as lifecycle
 import homestead_host_access as host_access
 
@@ -162,7 +163,7 @@ class ContainerSetTests(unittest.TestCase):
 
     def test_network_preparation_checks_additional_listeners_but_keeps_primary_ports(self):
         config = self.config()
-        with mock.patch.object(server.NETWORK, "prepare_deploy", side_effect=lambda cfg: dict(cfg, lb_ip="192.0.2.1")) as network:
+        with mock.patch.object(SVC, "prepare_deploy", side_effect=lambda cfg: dict(cfg, lb_ip="192.0.2.1")) as network:
             prepared = server.DEPLOY_ROUTES.prepare_deploy_network(config)
         self.assertEqual([8080, 9090], [p["container"] for p in network.call_args.args[0]["ports"]])
         self.assertEqual(config["ports"], prepared["ports"])
@@ -171,7 +172,7 @@ class ContainerSetTests(unittest.TestCase):
     def test_execution_provisions_additional_claims_and_saves_one_complete_pod_template(self):
         config = self.config()
         with mock.patch.object(server.OVERVIEW_ROUTES, "guard_managed_smb"), mock.patch.object(server.DEPLOY_ROUTES, "persist_icon_config"), \
-                mock.patch.object(server.NETWORK, "prepare_deploy", side_effect=lambda cfg: cfg), \
+                mock.patch.object(SVC, "prepare_deploy", side_effect=lambda cfg: cfg), \
                 mock.patch.object(server.VM_ROUTES, "prepare_lan", side_effect=lambda cfg: cfg), \
                 mock.patch.object(server.VOLOWNER, "prepare", side_effect=lambda cfg: cfg), \
                 mock.patch.object(server.STORAGE_ROUTES, "ensure_claim", return_value=False) as claim, \

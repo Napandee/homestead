@@ -17,7 +17,7 @@ import homestead_lan as LAN
 import homestead_lifecycle as LC
 import homestead_memory as MEMORY
 import homestead_names as NAMES
-import homestead_networking as NETWORK
+import homestead_vip_registry as REG
 import homestead_platform as PLATFORM
 import homestead_privileges as PRIV
 import homestead_updates as UPDATES
@@ -261,7 +261,7 @@ def _build_single_deployment(cfg):
     exposed = [p for p in cfg.get("ports") or [] if p.get("expose")]
     if exposed and cfg.get("network_mode") not in ("host", "lan"):
         mode = cfg.get("vip_mode", "shared")
-        vip = cfg.get("lb_ip") if mode in ("manual", "automatic") else ((cfg.get("lb_ip") or NETWORK.shared_vip()) if mode == "shared" else "")
+        vip = cfg.get("lb_ip") if mode in ("manual", "automatic") else ((cfg.get("lb_ip") or REG.shared_vip()) if mode == "shared" else "")
         svc_type = "ClusterIP" if cfg.get("network_mode") == "internal" else "LoadBalancer"
         svc = {
             "apiVersion": "v1", "kind": "Service",

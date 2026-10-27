@@ -19,7 +19,7 @@ import homestead_lhcapacity as LHCAP
 import homestead_lifecycle as LC
 import homestead_names as NAMES
 import homestead_node_probes as PROBES
-import homestead_networking as NETWORK
+import homestead_network_inventory as INV
 import homestead_nfs as NFS
 import homestead_operations as OPS
 import homestead_place as PLACE
@@ -240,7 +240,7 @@ def node_duties(pods, vols=None):
     except Exception:
         leases = []
     try:
-        network = cached("network", 5, NETWORK.inventory)
+        network = cached("network", 5, INV.inventory)
     except Exception:
         network = {}
     platform = network.get("platform_addresses") or {}
@@ -497,7 +497,7 @@ def node_impact(node, sources=None):
     src = sources or _impact_sources()
     try:
         # inventory()["addresses"] is VIPS.address_map(): {"nodes": [...], "addresses": [...]} (#372).
-        places = (cached("network", 5, NETWORK.inventory) or {}).get("addresses") or {}
+        places = (cached("network", 5, INV.inventory) or {}).get("addresses") or {}
         addresses = (places.get("addresses") or []) if isinstance(places, dict) else list(places)
     except Exception:
         addresses = []

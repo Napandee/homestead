@@ -22,7 +22,8 @@ import homestead_lan as LAN
 import homestead_leader as LEADER
 import homestead_logos as LOGOS
 import homestead_names as NAMES
-import homestead_networking as NETWORK
+import homestead_network_vms as VMNET
+import homestead_network_inventory as INV
 import homestead_nodes as NODES
 import homestead_platform as PLATFORM
 import homestead_routes as MODULE_ROUTES
@@ -119,7 +120,7 @@ def vm_create_options():
             "store": VMSTORE.choices() if (platform.get("harvester") or platform.get("cdi")) else [],
             "networks": vm_networks(),
             "network_details": vm_network_details(),
-            "vm_network_options": NETWORK.vm_network_options(NODES.node_temps()),
+            "vm_network_options": VMNET.vm_network_options(NODES.node_temps()),
             "subnets": vm_subnets(),
             "nodes": sorted(n["metadata"]["name"] for n in nodes),
             # The Hardware tab: CPU models every node offers, and KubeVirt's features.
@@ -293,10 +294,10 @@ def vm_address_problem(ip):
         if start and end and int(ipaddress.ip_address(start)) <= int(ipaddress.ip_address(ip)) <= int(ipaddress.ip_address(end)):
             return f"{ip} is inside the DHCP range {start}-{end}: the router may hand it to something else"
     try:
-        network = cached("network", 5, NETWORK.inventory)
+        network = cached("network", 5, INV.inventory)
     except Exception:
         network = {}
-    problem = NETWORK.cluster_address_problem(ip, network)
+    problem = INV.cluster_address_problem(ip, network)
     if problem:
         return problem
     # A few ports a machine usually has, quickly: a free address answers none.

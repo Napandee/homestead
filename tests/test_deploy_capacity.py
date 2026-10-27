@@ -7,6 +7,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import server
+import homestead_network_services as SVC
 import homestead_capacity_review as review
 import homestead_place as place
 
@@ -205,7 +206,7 @@ class DeployCapacityTests(unittest.TestCase):
         handler._body = lambda: copy.deepcopy(self.cfg)
         handler._client_ip = lambda: "127.0.0.1"
         handler._send = mock.Mock()
-        with mock.patch.object(server.NETWORK, "prepare_deploy", side_effect=lambda cfg: cfg):
+        with mock.patch.object(SVC, "prepare_deploy", side_effect=lambda cfg: cfg):
             handler.do_POST()
         code, body = handler._send.call_args.args
         self.assertEqual(200, code)
