@@ -2,7 +2,7 @@ import json, sys, unittest, urllib.error
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_pullwatch as PULL
-import homestead_updates as UPDATES
+import homestead_update_registry as REGISTRY
 import homestead_imports as IMP
 import homestead_operations as OPS
 
@@ -73,8 +73,8 @@ class RegistryLayerTests(unittest.TestCase):
 
         def fake(parsed, path, auths, accept="application/json"):
             return json.dumps(amd if path.endswith("sha256:amd") else index).encode(), {}
-        with unittest.mock.patch.object(UPDATES, "_registry_json", fake):
-            self.assertEqual([{"digest": f"sha256:{A}", "size": 7}], UPDATES.image_layers("nginx:1.27", "amd64"))
+        with unittest.mock.patch.object(REGISTRY, "_registry_json", fake):
+            self.assertEqual([{"digest": f"sha256:{A}", "size": 7}], REGISTRY.image_layers("nginx:1.27", "amd64"))
 
 
 class TrayMessageTests(unittest.TestCase):

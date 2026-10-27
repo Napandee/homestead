@@ -16,7 +16,7 @@ from unittest import mock
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
-import homestead_updates as UPDATES
+import homestead_update_registry as REGISTRY
 import homestead_volowner as VOLOWNER
 import server
 import homestead_deploy_manifests as MANIFESTS
@@ -208,7 +208,7 @@ def fake_registry(test, blobs, manifests=None):
     # The transport fixture is HTTP loopback; realm trust/TLS policy has
     # separate tests. These checks concern what the retry carries on a redirect.
     for patch in (mock.patch.dict(os.environ, {"NO_PROXY": "127.0.0.1", "no_proxy": "127.0.0.1"}),
-                  mock.patch.object(UPDATES, "_auth_realm")):
+                  mock.patch.object(REGISTRY, "_auth_realm")):
         patch.start()
         test.addCleanup(patch.stop)
     return registry.server_port, seen
@@ -218,7 +218,7 @@ class RedirectTests(unittest.TestCase):
     def test_the_registry_token_is_not_sent_on_to_blob_storage(self):
         port, seen = fake_registry(self, {"sha256:a": b"blob"})
         url = f"http://127.0.0.1:{port}/v2/x/blobs/sha256:a"
-        with UPDATES._open(urllib.request.Request(url)) as response:
+        with REGISTRY._open(urllib.request.Request(url)) as response:
             self.assertEqual(b"blob", response.read())
         self.assertIsNone(seen["storage"][-1]["authorization"])
 
@@ -227,7 +227,7 @@ class RedirectTests(unittest.TestCase):
         port, seen = fake_registry(self, {"sha256:a": b"blob"})
         url = f"http://127.0.0.1:{port}/v2/x/blobs/sha256:a"
         request = urllib.request.Request(url, headers={"User-Agent": "Homestead/2.0", "Accept": "application/json"})
-        with UPDATES._open(request) as response:
+        with REGISTRY._open(request) as response:
             self.assertEqual(b"blob", response.read())
         self.assertEqual(1, len(seen["storage"]))
         self.assertNotEqual(f"127.0.0.1:{port}", seen["storage"][0]["host"])
@@ -239,14 +239,14 @@ class RedirectTests(unittest.TestCase):
         manifest = json.dumps({"config": {"digest": "sha256:cfg"},
                                "layers": [{"digest": "sha256:l1"}, {"digest": "sha256:l2"}]}).encode()
         port, seen = fake_registry(self, {"sha256:cfg": config, **layers}, {"retry": manifest})
-        real_open = UPDATES._open
+        real_open = REGISTRY._open
 
         def plain(req, *args, **kwargs):
             # The registry is always asked over HTTPS; the fixture speaks HTTP.
             req.full_url = req.full_url.replace("https://", "http://", 1)
             return real_open(req, *args, **kwargs)
 
-        with mock.patch.object(UPDATES, "_open", side_effect=plain):
+        with mock.patch.object(REGISTRY, "_open", side_effect=plain):
             owners = VOLOWNER.image_owners(f"127.0.0.1:{port}/sambee:retry", ["/app/data", "/srv/extra"])
 
         self.assertEqual({"/app/data": (1000, 1000, 0o750), "/srv/extra": (1000, 1000, 0o755)}, owners)

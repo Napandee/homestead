@@ -32,7 +32,7 @@ import homestead_self_data_route as SELF_DATA_ROUTE
 import homestead_self_data_worker as SELF_DATA_WORKER
 import homestead_self_health as SELF_HEALTH
 import homestead_storage_runtime as STORAGE_RUNTIME
-import homestead_updates as UPDATES
+import homestead_update_rollouts as ROLLOUTS
 
 ROUTE_NEEDS = ("abandon_self_data_preparation", "cached", "class_selectable", "_dns_name",
                "get_app_settings", "kget", "_ksend", "ksend", "require_self_data_write",
@@ -404,7 +404,7 @@ def _self_data_helper_image(read, ns):
     digest_match = re.search(r"(?:^|@|://)(sha256:[a-f0-9]{64})$", statuses[0].get("imageID", ""))
     if not digest_match:
         raise SELF_DATA_FENCE.Held("The running Homestead image digest is unavailable; wait for it before reviewing")
-    return pod, UPDATES._immutable(containers[0]["image"], digest_match.group(1))
+    return pod, ROLLOUTS._immutable(containers[0]["image"], digest_match.group(1))
 
 
 def _require_no_data_handoff(read, ns):

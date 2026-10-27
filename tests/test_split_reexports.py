@@ -32,6 +32,7 @@ SPLITS = {
     "homestead_deploy": ("homestead_deploy_appstore", "homestead_deploy_manifests"),
     "homestead_lifecycle": ("homestead_workload_edit", "homestead_node_actions"),
     "homestead_vms": ("homestead_vm_list", "homestead_vm_edit"),
+    "homestead_updates": ("homestead_update_registry", "homestead_update_checks", "homestead_update_rollouts"),
 }
 
 # What a module handed to bind() reads through it, by holder: the files and how
@@ -46,6 +47,8 @@ HOLDERS = {
     "homestead_networking": (("homestead_move_state.py", r"(?<![\w.])NETWORK\.(\w+)"),
                              ("homestead_move_*.py", r"\bSTATE\.NETWORK\.(\w+)"),
                              ("homestead_self_address.py", r"(?<![\w.])network\.(\w+)")),
+    # ... and homestead_updates to automatic updates.
+    "homestead_updates": (("homestead_autoupdate.py", r"(?<![\w.])updates\.(\w+)"),),
 }
 
 # The names a split module still offers of its parts, for its HOLDERS.
@@ -56,6 +59,7 @@ INTERFACE = {
                            "validate_restore_class"),
     "homestead_networking": ("create_service", "inventory", "service_plan", "servicelb_present",
                              "set_default_vip"),
+    "homestead_updates": ("_pod_containers", "commit_prepared", "prepare_update", "rollback"),
 }
 
 

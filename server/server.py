@@ -451,7 +451,7 @@ import homestead_place as PLACE
 import homestead_hardware as HW
 import homestead_nodes as NODES
 import homestead_power_jobs as POWER_JOBS
-import homestead_updates as UPDATES
+import homestead_updates as UPDATES, homestead_update_rollouts as UPDATE_ROLLOUTS, homestead_update_registry as UPDATE_REGISTRY
 import homestead_vmusage as VMUSAGE
 import homestead_cancel as CANCEL
 import homestead_joblogs as JOBLOGS
@@ -572,13 +572,13 @@ UPDATES.bind(kget, ksend, DEFAULT_NS, DATA_DIR, SYS_NS, SMB_NAMESPACE,
 UPDATES.PART = homestead_part
 UPDATES.VERSION = lambda: HOMESTEAD_VERSION
 SMART.bind(kget, DEFAULT_NS, AUTH.smart_signing_key)
-OPS.bind(kget, DATA_DIR, UPDATES.progress, SMART.progress)
+OPS.bind(kget, DATA_DIR, UPDATE_ROLLOUTS.progress, SMART.progress)
 OPS.cdi_send = ksend
 RESTRUCTURE.bind(kget, ksend, raw_get)
 AFFINITY.bind(kget)
 FAILOVER.bind(kget, ksend)
 LAN.bind(kget, ksend)
-PULLWATCH.bind(kget, ksend, raw_get, lambda image, arch: UPDATES.image_layers(image, arch), DEFAULT_NS, DATA_DIR)
+PULLWATCH.bind(kget, ksend, raw_get, lambda image, arch: UPDATE_REGISTRY.image_layers(image, arch), DEFAULT_NS, DATA_DIR)
 
 
 UPDATES.pull_progress = _pull_progress

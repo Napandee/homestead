@@ -20,7 +20,7 @@ import homestead_names as NAMES
 import homestead_vip_registry as REG
 import homestead_platform as PLATFORM
 import homestead_privileges as PRIV
-import homestead_updates as UPDATES
+import homestead_update_registry as REGISTRY
 import homestead_uptime as UPTIME
 import homestead_volowner as VOLOWNER
 
@@ -187,7 +187,7 @@ def _build_single_deployment(cfg):
               "name": (p.get("name") or f"p{p['container']}-{str(p.get('protocol', 'TCP')).lower()}")[:15],
               "protocol": str(p.get("protocol", "TCP")).upper()}
              for p in cfg.get("ports") or []]
-    c = {"name": container_name, "image": UPDATES.with_tag(cfg["image"]), "imagePullPolicy": "IfNotPresent"}
+    c = {"name": container_name, "image": REGISTRY.with_tag(cfg["image"]), "imagePullPolicy": "IfNotPresent"}
     # Arguments to the image's own entrypoint - cloudflared's "tunnel run",
     # say. A list of plain strings, passed as they are; never a shell.
     args = cfg.get("args") or []
@@ -395,7 +395,7 @@ def build_sidecar_deployment(cfg, current):
               "name": (p.get("name") or f"p{p['container']}-{str(p.get('protocol', 'TCP')).lower()}")[:15],
               "protocol": str(p.get("protocol", "TCP")).upper()}
              for p in cfg.get("ports") or [] if p.get("container")]
-    container = {"name": container_name, "image": UPDATES.with_tag(cfg["image"]), "imagePullPolicy": "IfNotPresent"}
+    container = {"name": container_name, "image": REGISTRY.with_tag(cfg["image"]), "imagePullPolicy": "IfNotPresent"}
     if env:
         container["env"] = env
     if ports:

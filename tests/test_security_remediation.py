@@ -30,7 +30,7 @@ import homestead_vm_list as VM_LIST
 import homestead_vm_edit as VM_EDIT
 import homestead_yaml as yaml
 import homestead_compose as compose
-import homestead_updates as updates
+import homestead_update_registry as REGISTRY
 import homestead_files as files
 import homestead_fleet as fleet
 import homestead_config_backup as backup
@@ -251,8 +251,8 @@ class NetworkBoundaryTests(unittest.TestCase):
     def test_registry_credential_realms_are_bounded(self):
         for realm in ("http://registry.example/token", "https://attacker.example/token"):
             with self.assertRaises(PermissionError):
-                updates._auth_realm("https://registry.example/v2/app", realm, ("user", "secret"))
-        updates._auth_realm("https://registry-1.docker.io/v2/app", "https://auth.docker.io/token", ("user", "secret"))
+                REGISTRY._auth_realm("https://registry.example/v2/app", realm, ("user", "secret"))
+        REGISTRY._auth_realm("https://registry-1.docker.io/v2/app", "https://auth.docker.io/token", ("user", "secret"))
 
     def test_revocation_closes_idle_console_sockets(self):
         stopped = threading.Event()

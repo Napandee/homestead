@@ -43,6 +43,7 @@ import homestead_routes as ROUTER
 import homestead_schedules as SCHEDULES
 import homestead_start_order as START_ORDER
 import homestead_updates as UPDATES
+import homestead_update_rollouts as ROLLOUTS
 import homestead_usage as USAGE
 
 # server.py's helpers this module calls, bound by name at start.
@@ -367,9 +368,9 @@ def get_workloads(pods=None):
                 if waiting:
                     reason = waiting.get("reason", "Waiting")
                     waits.append({"container": cs.get("name", ""), "reason": reason,
-                                  "message": (UPDATES.explain_pull(waiting.get("message")) or waiting.get("message") or "")[:400]})
+                                  "message": (ROLLOUTS.explain_pull(waiting.get("message")) or waiting.get("message") or "")[:400]})
                     if reason in fatal_reasons:
-                        why = UPDATES.explain_pull(waiting.get("message"))
+                        why = ROLLOUTS.explain_pull(waiting.get("message"))
                         fatal_waits.append(f"{p['metadata']['name']}: {reason}" + (f" - {why}" if why else ""))
             if not ready:
                 transition_ages.append(age_secs(p["metadata"].get("creationTimestamp")))
@@ -382,7 +383,7 @@ def get_workloads(pods=None):
                     wanted = {cp.get("containerPort") for c in pspec.get("containers", []) or []
                               for cp in c.get("ports", []) or []}
                     own = sorted({row["port"] for row in ports if row.get("port") in wanted})
-                unplaced = UPDATES.explain_unplaced(placed.get("message", ""), own)
+                unplaced = ROLLOUTS.explain_unplaced(placed.get("message", ""), own)
                 if age_secs(p["metadata"].get("creationTimestamp")) > 60:
                     fatal_waits.append(f"{p['metadata']['name']} cannot be placed: {unplaced}")
             containers = pod_container_rows(p)
@@ -392,7 +393,7 @@ def get_workloads(pods=None):
             if not ready and not p["metadata"].get("deletionTimestamp") and any(
                     w["reason"] in ("ContainerCreating", "PodInitializing") for w in waits):
                 try:
-                    pull = UPDATES.pull_state(ns, p["metadata"]["name"]) or {}
+                    pull = ROLLOUTS.pull_state(ns, p["metadata"]["name"]) or {}
                     if pull.get("state") == "pulling":
                         pull.update(_pull_progress(p["spec"].get("nodeName", ""), pull.get("image", "")))
                     else:

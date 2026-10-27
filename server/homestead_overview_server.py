@@ -62,7 +62,7 @@ import homestead_scheduled_jobs as CRONJOBS
 import homestead_start_order as START_ORDER
 import homestead_self as SELF
 import homestead_storage as STORAGE
-import homestead_updates as UPDATES
+import homestead_update_checks as CHECKS
 import homestead_weekly_trim as WEEKLY_TRIM
 import homestead_upgrades as UPGRADES
 import homestead_uptime as UPTIME
@@ -273,7 +273,7 @@ def _diagnostic_read(path, timeout=5):
 
 
 # ------------------------------------------------------------- alerts
-UPDATE_SCAN_EVERY = UPDATES.FRESH_FOR
+UPDATE_SCAN_EVERY = CHECKS.FRESH_FOR
 _last_update_scan = [0.0]
 
 
@@ -320,10 +320,10 @@ def _alert_sources():
     if time.time() - _last_update_scan[0] > UPDATE_SCAN_EVERY:
         _last_update_scan[0] = time.time()
         try:
-            UPDATES.report()
+            CHECKS.report()
         except Exception:
             pass
-    latest = UPDATES._LATEST.get("report")
+    latest = CHECKS._LATEST.get("report")
     results["updates"] = ALERTS.update_facts(latest) if latest else None
     return results
 

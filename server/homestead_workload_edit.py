@@ -181,8 +181,8 @@ def _apply_container_edit(container, change, workload_name, own_secret=""):
         if image != container.get("image"):
             # A changed image says its tag; an unchanged one is left exactly as
             # it is, so an edit elsewhere does not roll the workload.
-            import homestead_updates as UPDATES
-            container["image"] = UPDATES.with_tag(image)
+            import homestead_update_registry as REGISTRY
+            container["image"] = REGISTRY.with_tag(image)
     if "env" in change:
         # References to the workload's own Secret came to the form as plain
         # values and return in change["env"]; other references are kept.
