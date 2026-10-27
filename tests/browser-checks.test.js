@@ -37,6 +37,18 @@ test("every browser check opens the demo at HOMESTEAD_URL", () => {
   assert.deepEqual(fixed, [], "read process.env.HOMESTEAD_URL, with the old address as the fallback");
 });
 
+test("no check acts on the app before its first page is open", () => {
+  // The gate hides before afterAuth's first reads; the first page's go() then
+  // closes any dialog a check has opened and abandons its reads (#891).
+  // openAuditPage (scripts/audit_ready.mjs) waits for that page instead.
+  // edit-after-first-page.mjs keeps the old wait on purpose, to show the race.
+  // It catches the one-line waitForFunction shape every check used; a locator
+  // wait on the gate (mobile-signin.mjs, which tests sign-in itself) passes.
+  const early = checks.filter(file => file !== "tests/integration/edit-after-first-page.mjs")
+    .filter(file => /waitForFunction\([^\n]*#gate['"]\)\??\.classList\.contains\(\s*['"]hidden/.test(read(file)));
+  assert.deepEqual(early, [], "open the app with openAuditPage from scripts/audit_ready.mjs");
+});
+
 test("every check script is run by CI, a release, or another check", () => {
   const runners = ["scripts/ci_ui_checks.sh", ...fs.readdirSync(".github/workflows").map(f => `.github/workflows/${f}`)]
     .concat(checks).map(file => [file, read(file)]);
