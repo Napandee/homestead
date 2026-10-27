@@ -37,22 +37,31 @@ SPLITS = {
                           "homestead_vm_create"),
 }
 
+# getattr or hasattr on the module a holder was given, by its name there.
+ATTR = r"\b(?:get|has)attr\(\s*{}\s*,\s*['\"](\w+)['\"]"
+
 # What a module handed to bind() reads through it, by holder: the files and how
-# they name the module they were given.
+# they name the module they were given, as NAME.x or as getattr(NAME, "x").
 HOLDERS = {
     # server.py hands homestead_longhorn to the move source and the move engine,
     # which keeps it on homestead_move_state; their tests hand in a fake.
     "homestead_longhorn": (("homestead_move_source.py", r"(?<![\w.])LH\.(\w+)"),
+                           ("homestead_move_source.py", ATTR.format("LH")),
                            ("homestead_move_state.py", r"(?<![\w.])LH\.(\w+)"),
-                           ("homestead_move_*.py", r"\bSTATE\.LH\.(\w+)")),
+                           ("homestead_move_*.py", r"\bSTATE\.LH\.(\w+)"),
+                           ("homestead_move_*.py", ATTR.format(r"(?:STATE\.)?LH"))),
     # ... and homestead_networking to the move engine and to the self address.
     "homestead_networking": (("homestead_move_state.py", r"(?<![\w.])NETWORK\.(\w+)"),
                              ("homestead_move_*.py", r"\bSTATE\.NETWORK\.(\w+)"),
-                             ("homestead_self_address.py", r"(?<![\w.])network\.(\w+)")),
+                             ("homestead_move_*.py", ATTR.format(r"(?:STATE\.)?NETWORK")),
+                             ("homestead_self_address.py", r"(?<![\w.])network\.(\w+)"),
+                             ("homestead_self_address.py", ATTR.format("network"))),
     # ... and homestead_updates to automatic updates.
-    "homestead_updates": (("homestead_autoupdate.py", r"(?<![\w.])updates\.(\w+)"),),
+    "homestead_updates": (("homestead_autoupdate.py", r"(?<![\w.])updates\.(\w+)"),
+                          ("homestead_autoupdate.py", ATTR.format("updates"))),
     # ... and homestead_imports to the Unraid VM import.
-    "homestead_imports": (("homestead_unraid_vms.py", r"(?<![\w.])IMP\.(\w+)"),),
+    "homestead_imports": (("homestead_unraid_vms.py", r"(?<![\w.])IMP\.(\w+)"),
+                          ("homestead_unraid_vms.py", ATTR.format("IMP"))),
 }
 
 # The names a split module still offers of its parts, for its HOLDERS.
@@ -63,7 +72,7 @@ INTERFACE = {
                            "validate_restore_class"),
     "homestead_networking": ("create_service", "inventory", "service_plan", "servicelb_present",
                              "set_default_vip"),
-    "homestead_updates": ("_pod_containers", "commit_prepared", "prepare_update", "rollback"),
+    "homestead_updates": ("_pod_containers", "commit_prepared", "prepare_update", "refresh_soon", "rollback"),
     "homestead_imports": ("VM_DISK_LABEL", "_get_or_none", "_recheck_vm_creation", "_required_name", "commit_vm",
                           "prepare_vm", "vm_disk_import_plan"),
 }

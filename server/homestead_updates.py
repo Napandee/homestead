@@ -203,3 +203,4 @@ import homestead_update_rollouts as ROLLOUTS  # noqa: E402
 # bind() (its tests hand in a fake). Everything else is read, and replaced in
 # tests, where it is defined.
 from homestead_update_rollouts import _pod_containers, commit_prepared, prepare_update, rollback  # noqa: E402,F401
+from homestead_update_checks import refresh_soon  # noqa: E402,F401
