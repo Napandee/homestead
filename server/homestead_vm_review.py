@@ -29,6 +29,7 @@ import homestead_vm_mutation_job as VM_MUTATION_JOB
 import homestead_vm_power_job as VM_POWER_JOB
 import homestead_vm_profiles as VM_PROFILES
 import homestead_vms as VMS
+import homestead_vm_edit as VM_EDIT
 import homestead_vmstore as VMSTORE
 
 # Bound by the server: its cluster client, the namespace a VM is in when none
@@ -306,9 +307,9 @@ def vm_edit_capacity(prepared):
         # Existing controller templates are not promises to recreate a missing
         # disk. Only new definitions get the planned-claim exception.
         proposed = copy.deepcopy(vm)
-        old_claims = {VMS._volume_claim(volume) for volume in current["spec"]["template"]["spec"].get("volumes") or []}
-        proposed["spec"]["dataVolumeTemplates"] = [row for row in VMS._dv_templates(vm) if row["metadata"]["name"] not in old_claims]
-        VMS._set_claim_templates(proposed, [row for row in VMS._claim_templates(vm) if row["metadata"]["name"] not in old_claims])
+        old_claims = {VM_EDIT._volume_claim(volume) for volume in current["spec"]["template"]["spec"].get("volumes") or []}
+        proposed["spec"]["dataVolumeTemplates"] = [row for row in VM_EDIT._dv_templates(vm) if row["metadata"]["name"] not in old_claims]
+        VM_EDIT._set_claim_templates(proposed, [row for row in VM_EDIT._claim_templates(vm) if row["metadata"]["name"] not in old_claims])
         downloads = [effect for effect in prepared["effects"] if effect["kind"] == "image-download"]
         claims = VM_CLAIMS.plans(proposed, read, prepared["to_create"], downloads)
         # Pin only newly planned disks. Existing controller templates must not
@@ -341,8 +342,8 @@ def prepare_vm_edit(body):
         raise ValueError("Save the VM edit first, then review Restart separately against its saved resources")
     ns = _dns_name(body.get("ns", DEFAULT_NS), "namespace")
     name = _dns_name(body.get("name"), "VM name")
-    prepared = VMS.prepare_edit(ns, name, body)
-    VMS._recheck_edit(prepared)
+    prepared = VM_EDIT.prepare_edit(ns, name, body)
+    VM_EDIT._recheck_edit(prepared)
     return prepared
 
 
@@ -373,9 +374,9 @@ def reviewed_vm_edit(body):
             if actual != expected:
                 raise CAPACITY_REVIEW.Rejected("VM edit dependencies changed; inspect retained resources and review again", fresh)
         CAPACITY_REVIEW.enforce(body, fresh, context)
-        VMS._recheck_edit(resolved)
+        VM_EDIT._recheck_edit(resolved)
     return VM_MUTATION_JOB.dispatch("vm-edit", body, prepared["namespace"], prepared["name"], prepared["identity"], OPS, VMS.ksend,
-        lambda send: VMS.commit_edit(prepared, before_save=before_save, send=send))
+        lambda send: VM_EDIT.commit_edit(prepared, before_save=before_save, send=send))
 
 
 def vm_cluster_configuration(body, *, preview=False):

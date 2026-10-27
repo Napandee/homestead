@@ -67,7 +67,7 @@ import homestead_weekly_trim as WEEKLY_TRIM
 import homestead_upgrades as UPGRADES
 import homestead_uptime as UPTIME
 import homestead_vips as VIPS
-import homestead_vms as VMS
+import homestead_vm_list as VM_LIST
 import homestead_vmusage as VMUSAGE
 import homestead_workloads as WORKLOADS
 
@@ -141,7 +141,7 @@ def _uptime_loop():
         if LEADER.is_leader():
             try:
                 try:
-                    vms = cached("vms", 5, VMS.list_vms)
+                    vms = cached("vms", 5, VM_LIST.list_vms)
                 except Exception as error:
                     # Unread VMs sit this round out; their records are left as they were, not checked as gone.
                     vms = None
@@ -390,7 +390,7 @@ def outage_tick():
     """After a monitoring round, on the leader: any outage action that is due,
     then the carry-over of webhooks saved before #741 - after, and guarded, so
     nothing in it can hold up or stop an outage action."""
-    found = OUTAGE.items(cached("wl", 5, WORKLOADS.get_workloads), cached("vms", 5, VMS.list_vms))
+    found = OUTAGE.items(cached("wl", 5, WORKLOADS.get_workloads), cached("vms", 5, VM_LIST.list_vms))
     did = []
     if found:
         operations = OPS.snapshot()
@@ -413,7 +413,7 @@ def outage_tick():
 
 
 def scheduled_items():
-    return SCHEDULES.items(cached("wl", 5, WORKLOADS.get_workloads), cached("vms", 5, VMS.list_vms))
+    return SCHEDULES.items(cached("wl", 5, WORKLOADS.get_workloads), cached("vms", 5, VM_LIST.list_vms))
 
 
 def schedule_act(item, action):

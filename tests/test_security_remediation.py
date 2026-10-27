@@ -26,6 +26,8 @@ import homestead_icons as icons
 import homestead_sessions as sessions
 import homestead_helm as helm
 import homestead_vms as vms
+import homestead_vm_list as VM_LIST
+import homestead_vm_edit as VM_EDIT
 import homestead_yaml as yaml
 import homestead_compose as compose
 import homestead_updates as updates
@@ -220,7 +222,7 @@ class SensitiveResponseTests(unittest.TestCase):
 
     def test_vm_cloud_init_secret_is_not_read_for_a_viewer(self):
         vm = {"metadata": {"name": "vm", "namespace": "lab"}, "spec": {"template": {"spec": {}}}}
-        with mock.patch.object(vms, "_get", return_value=vm), mock.patch.object(vms, "kget", return_value={}), mock.patch.object(vms, "_row", return_value={"disks": []}), mock.patch.object(vms, "_claims", return_value={}), mock.patch.object(vms, "_datavolumes", return_value={}), mock.patch.object(vms, "_filling", return_value=[]), mock.patch.object(vms, "events_for", return_value=[]), mock.patch.object(vms, "_read_cloud_init", return_value={"user_data": "fixture-secret"}) as read:
+        with mock.patch.object(vms, "_get", return_value=vm), mock.patch.object(vms, "kget", return_value={}), mock.patch.object(VM_LIST, "_row", return_value={"disks": []}), mock.patch.object(VM_LIST, "_claims", return_value={}), mock.patch.object(VM_LIST, "_datavolumes", return_value={}), mock.patch.object(VM_LIST, "_filling", return_value=[]), mock.patch.object(vms, "events_for", return_value=[]), mock.patch.object(VM_EDIT, "_read_cloud_init", return_value={"user_data": "fixture-secret"}) as read:
             answer = vms.detail("lab", "vm", include_sensitive=False)
         read.assert_not_called()
         self.assertNotIn("cloud_init", answer)

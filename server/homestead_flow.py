@@ -8,6 +8,7 @@ import homestead_network_inventory as INV
 import homestead_routes
 import homestead_start_order as START_ORDER
 import homestead_vms as VMS
+import homestead_vm_edit as VM_EDIT
 
 # server.py's: the Kubernetes read, the namespaces that are the platform's
 # own, a workload's logo, the copy count of a volume part-way through a move,
@@ -276,7 +277,7 @@ def get_flow2():
                    or (((vm.get("spec") or {}).get("template") or {}).get("spec") or {}).get("volumes") or [])
         addresses = [a for i in (vmi.get("status") or {}).get("interfaces") or []
                      for a in (i.get("ipAddresses") or [i.get("ipAddress")]) if a and ":" not in a]
-        row = {"disks": [{"claim": VMS._volume_claim(v)} for v in volumes], "ip": addresses[0] if addresses else "",
+        row = {"disks": [{"claim": VM_EDIT._volume_claim(v)} for v in volumes], "ip": addresses[0] if addresses else "",
                "status": VMS._status(vm, vmi), "node": (vmi.get("status") or {}).get("nodeName", ""),
                "running": (vmi.get("status") or {}).get("phase") == "Running"}
         launcher = launchers.get((ns, nm))

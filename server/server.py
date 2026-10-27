@@ -512,7 +512,7 @@ import homestead_baseline as BASELINE
 import homestead_components as COMPONENTS
 import homestead_macvtap as MACVTAP
 import homestead_resources as RESOURCES
-import homestead_vms as VMS
+import homestead_vms as VMS, homestead_vm_list as VM_LIST
 import homestead_vm_review as VM_REVIEW
 import homestead_isos as ISOS
 import homestead_lhcapacity as LHCAP
@@ -975,7 +975,7 @@ SETUP.bind(DATA_DIR, overview=lambda: OVERVIEW_ROUTES.get_overview(), nodes=lamb
            vm_networks=lambda: vm_network_details(strict=True), storage_classes=lambda: storage_classes(),
            samba=lambda: SHARE_SERVERS.samba_state())
 API_V1.bind(nodes=lambda: CACHE.cached("nodes", 5, NODES.get_nodes), workloads=lambda: CACHE.cached("wl", 5, WORKLOADS.get_workloads),
-            vms=lambda: CACHE.cached("vms", 5, VMS.list_vms),
+            vms=lambda: CACHE.cached("vms", 5, VM_LIST.list_vms),
             alerts=lambda: [a for a in ALERTS.active() if a.get("announced", 0) > 0],
             jobs=OPS.snapshot, scale=api_scale, restart=restart_workload, vm_power=api_vm_power,
             version=lambda: HOMESTEAD_VERSION)

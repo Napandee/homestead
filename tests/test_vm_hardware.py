@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import homestead_vm_hardware as HW
 import homestead_isos as ISOS
 import homestead_vms as vms
+import homestead_vm_edit as VM_EDIT
 import homestead_imports as imports
 import test_vm_edit as edit_fixtures
 
@@ -240,8 +241,8 @@ class AttachTests(unittest.TestCase):
         HW.apply(self.cluster.vm, {"boot_output": "gpu"})
         with mock.patch.object(passthrough, "resources", return_value={"resources": []}):
             with self.assertRaisesRegex(ValueError, "attached GPU"):
-                vms.prepare_edit("lab", "web", {"host_devices": {"remove": ["gpu"]}})
-            result = vms.prepare_edit("lab", "web", {"host_devices": {"remove": ["gpu"]},
+                VM_EDIT.prepare_edit("lab", "web", {"host_devices": {"remove": ["gpu"]}})
+            result = VM_EDIT.prepare_edit("lab", "web", {"host_devices": {"remove": ["gpu"]},
                                                        "hardware": {"boot_output": "console"}})
         self.assertEqual("console", HW.read(result["vm"])["boot_output"])
         self.assertTrue(HW.read(result["vm"])["graphics"])
@@ -249,7 +250,7 @@ class AttachTests(unittest.TestCase):
 
     def test_an_iso_goes_in_a_cd_rom(self):
         with mock.patch.object(vms, "iso_ready", lambda ns, name: {"metadata": {"name": name}}):
-            prepared = vms.prepare_edit("lab", "web", {"add_disks": [{"kind": "cd-rom", "iso": "iso-debian-1", "boot": "1"}]})
+            prepared = VM_EDIT.prepare_edit("lab", "web", {"add_disks": [{"kind": "cd-rom", "iso": "iso-debian-1", "boot": "1"}]})
         spec = prepared["vm"]["spec"]["template"]["spec"]
         drive = next(d for d in spec["domain"]["devices"]["disks"] if "cdrom" in d)
         volume = next(v for v in spec["volumes"] if v["name"] == drive["name"])
@@ -266,26 +267,26 @@ class AttachTests(unittest.TestCase):
                     "claims": {}, "current": vm(["w11-disk"]), "vm": vm(["w11-disk", "iso-virtio"])}
         found = {"iso-virtio": {"metadata": {"labels": {"homestead.io/iso": "true"}}}}
         with mock.patch.object(vms, "_get", lambda ns, name: prepared["current"]), \
-                mock.patch.object(vms, "_identity", lambda obj: {"uid": "u", "resourceVersion": "1"}), \
+                mock.patch.object(VM_EDIT, "_identity", lambda obj: {"uid": "u", "resourceVersion": "1"}), \
                 mock.patch.object(vms.KUBE, "get_optional", lambda path, read=None: found.get(path.rsplit("/", 1)[-1])):
-            vms._recheck_edit(prepared)
+            VM_EDIT._recheck_edit(prepared)
             found["iso-virtio"] = {"metadata": {"labels": {}}}
             with self.assertRaisesRegex(ValueError, "cannot be adopted"):
-                vms._recheck_edit(prepared)
+                VM_EDIT._recheck_edit(prepared)
 
     def test_an_iso_not_ready_is_refused(self):
         def refuse(ns, name):
             raise ValueError("iso-debian-1 is still being copied")
         with mock.patch.object(vms, "iso_ready", refuse), self.assertRaisesRegex(ValueError, "still being copied"):
-            vms.prepare_edit("lab", "web", {"add_disks": [{"kind": "cd-rom", "iso": "iso-debian-1"}]})
+            VM_EDIT.prepare_edit("lab", "web", {"add_disks": [{"kind": "cd-rom", "iso": "iso-debian-1"}]})
 
     def test_hardware_travels_with_an_edit(self):
-        prepared = vms.prepare_edit("lab", "web", {"hardware": {"firmware": "uefi", "secure_boot": False, "efi_persistent": False, "tpm": "on"}})
+        prepared = VM_EDIT.prepare_edit("lab", "web", {"hardware": {"firmware": "uefi", "secure_boot": False, "efi_persistent": False, "tpm": "on"}})
         dom = prepared["vm"]["spec"]["template"]["spec"]["domain"]
         self.assertEqual(({"efi": {"secureBoot": False}}, {}), (dom["firmware"]["bootloader"], dom["devices"]["tpm"]))
         self.assertTrue(prepared["changed_hardware"])
         with self.assertRaisesRegex(ValueError, "count or its topology"):
-            vms.prepare_edit("lab", "web", {"cores": 4, "hardware": {"cpu": {"sockets": 2}}})
+            VM_EDIT.prepare_edit("lab", "web", {"cores": 4, "hardware": {"cpu": {"sockets": 2}}})
 
 
 class InstallTests(unittest.TestCase):

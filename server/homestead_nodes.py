@@ -26,7 +26,7 @@ import homestead_place as PLACE
 import homestead_ports as PORTS
 import homestead_routes as ROUTER
 import homestead_smart as SMART
-import homestead_vms as VMS
+import homestead_vm_list as VM_LIST
 
 kget = ksend = None
 DEFAULT_NS, SYS_NS = "lab", set()
@@ -505,7 +505,7 @@ def node_impact(node, sources=None):
         placement = cached("impact:" + node, 5, lambda: PLACE.impact(node))
     except Exception:
         placement = None
-    return IMPACT.preview(node, cached("wl", 5, get_workloads), src["deployments"], cached("vms", 5, VMS.list_vms), src["raw_vms"],
+    return IMPACT.preview(node, cached("wl", 5, get_workloads), src["deployments"], cached("vms", 5, VM_LIST.list_vms), src["raw_vms"],
                           cached("vol", 8, get_volumes), addresses, nodes, placement,
                           sets=src["sets"], pvs=src["pvs"], node_down=src["node_down"])
 

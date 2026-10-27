@@ -31,6 +31,7 @@ SPLITS = {
                              "homestead_network_services", "homestead_vip_registry", "homestead_network_vms"),
     "homestead_deploy": ("homestead_deploy_appstore", "homestead_deploy_manifests"),
     "homestead_lifecycle": ("homestead_workload_edit", "homestead_node_actions"),
+    "homestead_vms": ("homestead_vm_list", "homestead_vm_edit"),
 }
 
 # What a module handed to bind() reads through it, by holder: the files and how
