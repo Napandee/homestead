@@ -14,6 +14,7 @@ case "${1:-}" in
     ;;
   dialog-flows)
     node tests/integration/audit-ready.mjs
+    node tests/integration/edit-after-first-page.mjs
     node tests/integration/operator-enable.mjs
     node tests/integration/ha-update-reload.mjs
     DIALOG_STANDARD_SCREENSHOTS=release-assets/dialogs/section-rail node tests/integration/dialog-section-rail.mjs
