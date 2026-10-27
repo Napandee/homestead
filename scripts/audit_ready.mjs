@@ -21,10 +21,15 @@ export const DIALOG_CAPTURE_STYLE = ".modalbox{max-height:none!important;overflo
 
 export async function withCaptureStyle(page, run) {
   const style = await page.addStyleTag({ content: DIALOG_CAPTURE_STYLE });
+  let done = false;
   try {
-    return await run();
+    const result = await run();
+    done = true;
+    return result;
   } finally {
-    await style.evaluate((s) => s.remove());
+    // After a good capture a style that stays would skew the next dialog's
+    // measurements, so that fails; after a failed one, report the failure.
+    await style.evaluate((s) => s.remove()).catch((error) => { if (done) throw error; });
   }
 }
 
