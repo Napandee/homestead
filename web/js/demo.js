@@ -2574,6 +2574,26 @@ ssh_pwauth: true
       if (offer === "raise") return { state: "raise", hosts: 2, volumes: rows.map(r => ({ ...r, from: 1, to: 2 })) };
       return { state: "none", hosts: 2, volumes: [] };
     },
+    // What storage leaves behind (#932): none in the demo unless a check asks
+    // for Released volumes ("released") or a stale session ("iscsi"), or both.
+    "/api/storage/leftovers": () => {
+      const ask = String(window.__demoLeftovers || ""), GiB = 1024 ** 3;
+      const kept = (pv, namespace, claim, size, hosts, extra = {}) => ({ pv, namespace, claim, class: "longhorn-migratable", policy: "Retain",
+        size: `${size}Gi`, size_bytes: size * GiB, released_at: new Date(Date.now() - 12 * 86400000).toISOString(),
+        driver: "driver.longhorn.io", longhorn: pv, hosts, allocated_bytes: size * GiB * hosts.length, old_copy: false, ...extra });
+      return {
+        released: { state: "ok", volumes: ask.includes("released") ? [
+          kept("pvc-demo-scratch-1", "vm-imports", "prime-demo-disk-with-a-long-descriptive-name-scratch", 42, ["node-1", "node-2"]),
+          kept("pvc-demo-scratch-2", "vm-imports", "prime-demo-disk-2-scratch", 20, ["node-2"]),
+          kept("pvc-demo-old-notes", "lab", "notes-data", 5, ["node-1"], { class: "longhorn", old_copy: true }),
+          kept("pv-demo-nfs", "media", "archive", 100, [], { class: "nfs", driver: "nfs.csi.k8s.io", longhorn: "", allocated_bytes: 100 * GiB })] : [] },
+        iscsi: { state: "ok", hosts: ask.includes("iscsi") ? [{ node: "node-2", sessions: [
+          { sid: 67, target: "iqn.2019-10.io.longhorn:pvc-demo-notes", volume: "pvc-demo-notes", namespace: "lab", claim: "notes-data",
+            state: "FAILED", address: "192.0.2.40", port: 3260, disks: ["sdj"] },
+          { sid: 71, target: "iqn.2019-10.io.longhorn:pvc-demo-spool", volume: "pvc-demo-spool", namespace: "lab", claim: "spool-data",
+            state: "LOGGED_IN", address: "192.0.2.40", port: 3260, disks: ["sds"] }] }] : [] },
+      };
+    },
     "/api/self/data/two-copies": () => {
       const created = !window.__demoTwoCopiesMade;
       window.__demoTwoCopiesMade = true;
