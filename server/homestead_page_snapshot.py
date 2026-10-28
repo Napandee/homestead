@@ -11,12 +11,25 @@ forgets its key (homestead_kube.fresh_reads, homestead_routes.forget) is not
 kept, nor served after it; the forget also wakes the cycle.
 
 homestead_overview_server's _sampler drives the cycle on the leader and
-passes the builders in, so this module imports none of the page modules."""
+passes the builders in, so this module imports none of the page modules.
+
+The other replicas serve the leader's parts too (#906), as they show the
+leader's other state (homestead_leader_state): after each cycle the leader
+writes its fresh parts to FILE on the shared data volume, and each other
+replica's sampler loop takes in a newer file - never a request. A part taken
+in is kept in this replica's cache under its as_of and served by the same
+rules as the leader's own: not after STALE_AFTER, not after a write here
+forgets or pops its key, and not over a newer read of this replica's own.
+When the leader stops writing, its parts age out and each replica computes
+for itself again, as before."""
+import json
+import os
 import threading
 import time
 
 import homestead_cache as CACHE
 import homestead_routes as ROUTER
+import homestead_shared as SHARED
 
 # The parts, by their routes' cache keys.
 PARTS = ("nodes", "wl", "vol", "stor", "lhcap", "ov")
@@ -33,6 +46,10 @@ _parts = {}             # key -> (as_of, value)
 _wake = threading.Event()
 _wanted = threading.Event()
 _state = {"last": None, "leader": False}
+# The leader's parts for the other replicas, on the shared data volume.
+FILE = "page-snapshot.json"
+_shared = {"seen": None, "failing": False}   # the file last taken in; whether writing it fails
+_floor = {}             # key -> no leader part read before this is taken in (a pop here)
 
 
 def cadence():
@@ -47,6 +64,8 @@ def reset():
         _parts.clear()
     _wanted.clear()
     _state.update(last=None, leader=False)
+    _shared.update(seen=None, failing=False)
+    _floor.clear()
 
 
 def wake():
@@ -122,10 +141,11 @@ def tick(is_leader, inputs, builders, now=None):
     if not leader:
         if _state["leader"]:
             # A replica that lost the lease no longer refreshes its parts:
-            # it computes for itself, as a standby does.
+            # it serves the new leader's, as every other replica does.
             with _lock:
                 _parts.clear()
         _state["leader"] = False
+        take_in()
         return None
     _state["leader"] = True
     now = time.monotonic() if now is None else now
@@ -136,7 +156,95 @@ def tick(is_leader, inputs, builders, now=None):
         return None
     _wanted.clear()
     _state["last"] = now
-    return cycle(inputs, builders)
+    done = cycle(inputs, builders)
+    share()
+    return done
+
+
+def _path():
+    return os.path.join(SHARED.DIR, FILE)
+
+
+def share(now=None):
+    """Write the leader's fresh parts for the other replicas. Never raises:
+    a page they compute for themselves is no worse than before."""
+    now = time.time() if now is None else now
+    with _lock:
+        keys = list(_parts)
+    parts = {}
+    for key in keys:
+        part = read(key, now)
+        if part is not None:
+            parts[key] = [part[0], part[1]]
+    try:
+        SHARED.write_json(_path(), {"written": now, "parts": parts}, separators=(",", ":"))
+        _shared["failing"] = False
+    except Exception as error:
+        # During a move of Homestead's own data, writes are held: tried again next cycle.
+        if not _shared["failing"]:
+            _shared["failing"] = True
+            print(f"page snapshot: not shared: {str(error)[:160]}", flush=True)
+
+
+def _load(path):
+    with open(path, encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def take_in(now=None):
+    """On a replica that is not the leader: the leader's parts, when its
+    file changed since the last look. A part is taken in only while fresh,
+    newer than what is held, newer than the last forget of its key here,
+    and newer than this replica's own kept read of it.
+
+    A module that pops its key from the cache after a write leaves no time
+    behind. So a held part whose key is no longer in the cache sets a floor
+    for its key at the time that is noticed, every look: a leader part is
+    then taken in only when its cycle started after that, so never one read
+    before the write. (A newer read of this replica's own in its place is
+    no write: the kept-read rule below covers it.)"""
+    now = time.time() if now is None else now
+    with _lock:
+        for key, held in list(_parts.items()):
+            if CACHE.kept_at(key) is None:
+                _parts.pop(key)
+                _floor[key] = now
+    path = _path()
+    try:
+        status = os.stat(path)
+    except OSError:
+        return
+    # Each write replaces the file (homestead_shared.write_json), so a new
+    # one has a new inode as well as a new time.
+    seen = (path, status.st_ino, status.st_mtime_ns, status.st_size)
+    if seen == _shared["seen"]:
+        return
+    _shared["seen"] = seen
+    try:
+        parts = _load(path).get("parts")
+    except (OSError, ValueError, AttributeError):
+        return
+    if not isinstance(parts, dict):
+        return
+    for key, part in parts.items():
+        if key not in PARTS or not isinstance(part, list) or len(part) != 2:
+            continue
+        try:
+            as_of = float(part[0])
+        except (TypeError, ValueError):
+            continue
+        # The epoch first, as cycle() does: a forget after this point makes
+        # keep() refuse, so a part read before it is never kept.
+        epoch = CACHE.epoch(key)
+        if (now - as_of >= STALE_AFTER or as_of <= CACHE.forgotten_at(key)
+                or as_of <= _floor.get(key, 0.0)):
+            continue
+        with _lock:
+            held, kept = _parts.get(key), CACHE.kept_at(key)
+            if (held and held[0] >= as_of) or (kept is not None and kept >= as_of):
+                continue
+            if CACHE.keep(key, part[1], epoch, at=as_of):
+                _parts[key] = (as_of, part[1])
 
 
 def sleep(seconds):

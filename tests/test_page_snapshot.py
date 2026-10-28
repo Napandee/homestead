@@ -115,7 +115,14 @@ class Cluster:
 
 
 def clean_snapshot(test):
+    """A fresh snapshot, sharing its parts (#906) in a folder of the test's own."""
+    import tempfile
     import homestead_page_snapshot as PAGES
+    import homestead_shared as SHARED
+    folder = tempfile.TemporaryDirectory()
+    test.addCleanup(folder.cleanup)
+    test.addCleanup(SHARED.bind, SHARED.DIR)
+    SHARED.bind(folder.name)
     PAGES.reset()
     test.addCleanup(PAGES.reset)
     return PAGES
