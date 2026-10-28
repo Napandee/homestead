@@ -183,14 +183,16 @@ const Timeline = (() => {
           .map(([v, l]) => option(v, l, s.every)).join("")}</select>`),
         `<div id="sum_day_field"${s.every === "weekly" ? "" : " hidden"}>${UI.field("On", `<select id="sum_day">${WEEKDAYS.map((d, i) => option(i, d, s.day ?? 6)).join("")}</select>`)}</div>`,
         UI.field("At", `<select id="sum_hour">${Array.from({ length: 24 }, (_, h) => option(h, clock(h), s.hour ?? 8)).join("")}</select>`)) +
-      UI.field("Time zone", `<select id="sum_tz">${zones.map(z => option(z, z, zone)).join("")}</select>`) +
+      // Typed, with the browser's zones offered: a list of all of them would be 400 names.
+      UI.field("Time zone", `<input id="sum_tz" type="text" maxlength="64" autocomplete="off" spellcheck="false" list="sum_tz_list" value="${esc(zone)}">
+        <datalist id="sum_tz_list">${zones.map(z => `<option value="${esc(z)}"></option>`).join("")}</datalist>`) +
       UI.actions(UI.cancel() + UI.button("Save", "summarySave(this)", { kind: "pri" })));
   }
 
   async function summarySave(button) {
     const every = $("#sum_every").value;
     const body = every === "off" ? { every } : { every, ...(every === "weekly" ? { day: +$("#sum_day").value } : {}),
-      hour: +$("#sum_hour").value, tz: $("#sum_tz").value };
+      hour: +$("#sum_hour").value, tz: $("#sum_tz").value.trim() };
     if (button) button.disabled = true;
     try {
       state.summary = await api("/api/timeline/summary", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });

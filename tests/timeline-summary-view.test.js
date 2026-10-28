@@ -71,6 +71,11 @@ test("Change opens a dialog with the saved choice, and Save sends whole numbers"
   assert.match(out.modal.html, /<option value="weekly" selected>/);
   assert.match(out.modal.html, /<option value="2" selected>Wednesday/);
   assert.match(out.modal.html, /<option value="9" selected>09:00/);
+  // The zone is typed, with the browser's zones offered: a select of every
+  // zone would put 400 names in the dialog's words (audit_dialogs.mjs).
+  assert.match(out.modal.html, /<input id="sum_tz"[^>]*list="sum_tz_list"[^>]*value="Europe\/London"/);
+  assert.match(out.modal.html, /<datalist id="sum_tz_list">/);
+  assert.doesNotMatch(out.modal.html, /<select id="sum_tz"/);
   await ctx.summarySave();
   assert.deepEqual(out.posts, [["/api/timeline/summary", { every: "weekly", day: 4, hour: 21, tz: "Europe/Paris" }]]);
   assert.equal(out.closed, 1);
