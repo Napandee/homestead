@@ -202,6 +202,25 @@ def values(ns, dep, read):
     return out
 
 
+# What the Edit form shows for a Secret-held value to someone who may not
+# save the form (a viewer, or an operator on a workload only an admin may
+# edit): the variable's name stays, and that it has a value.
+MASK = "••••••"
+
+
+def mask(payload):
+    """The Edit form (workload_edit_payload) with every Secret-held value
+    replaced by MASK, in place; returns it."""
+    for container in payload.get("containers") or []:
+        held = set(container.get("secret_env") or [])
+        container["env"] = {key: MASK if key in held and value not in (None, "") else value
+                            for key, value in (container.get("env") or {}).items()}
+        container["secret_env_hidden"] = bool(held)
+    if payload.get("containers") and "env" in payload:
+        payload["env"] = payload["containers"][0]["env"]
+    return payload
+
+
 def own(dep):
     """The workload's own Secret, whose references editing may replace."""
     return (dep.get("metadata", {}).get("annotations") or {}).get(ANNOTATION, "")
