@@ -60,6 +60,43 @@ function dashboardAlert(items) {
   return `<div class="dash-alert"${lead.health ? " data-health" : ""}>${UI.callout(tone, lead.title, body)}</div>`;
 }
 
+/* The sidebar's health pill, on every page (#940). The Dashboard paints it
+   from its overview; every page from each /api/alerts read (pwa.js), which
+   carries the same verdict. Colour is the verdict; starting and updating are
+   not faults, so they stay neutral with a pulsing dot. Dashed is "not there
+   yet": CHECKING before the first answer, UNKNOWN when there is no verdict
+   (null, or the server's "unknown"), and the last verdict once it is a
+   minute old. h undefined (a server without the field) leaves the pill be. */
+function paintHealthPill(h) {
+  const pill = $("#healthPill");
+  if (!pill || h === undefined) return;
+  const state = h?.state ? String(h.state).toLowerCase() : "unknown";
+  const unread = state === "unknown";
+  const tone = { healthy: "ok", degraded: "warn", critical: "bad" }[state] || "neutral";
+  const busy = state === "starting" || state === "updating";
+  const age = unread || typeof h.age_s !== "number" ? null : h.age_s;
+  const extra = unread ? " pending" : busy ? " busy" : "";
+  pill.className = `ui-chip ${tone}${extra}${age !== null && age >= 60 ? " stale" : ""}`;
+  // role="status": a rewritten text is read out again, so only when it changes.
+  if (pill.textContent !== state.toUpperCase()) pill.textContent = state.toUpperCase();
+  pill.dataset.state = state;
+  const checked = age === null ? "" : age < 10 ? "checked just now" : age < 60 ? `checked ${age}s ago` : `checked ${fmtAgo(age)}`;
+  pill.title = unread ? "Homestead could not read the cluster's health just now"
+    : [h.summary, checked].filter(Boolean).join(" · ");
+}
+/* The pill as index.html draws it, before any answer: on sign-out, so the
+   next session does not start from this one's verdict. */
+function healthPillChecking() {
+  const pill = $("#healthPill");
+  if (!pill) return;
+  pill.className = "ui-chip neutral pending";
+  pill.textContent = "CHECKING";
+  pill.dataset.state = "checking";
+  pill.title = "Reading the cluster's health";
+}
+window.paintHealthPill = paintHealthPill;
+window.healthPillChecking = healthPillChecking;
+
 async function viewDash() {
   if (Dashboard.editing()) return;
   const requestedNavigation = window.NAV_TOKEN;
@@ -82,12 +119,7 @@ async function viewDash() {
   // A node near its allocation limit takes no new replicas: said before it bites.
   const tight = (cap?.nodes || []).filter(n => n.level !== "ok");
   window.refreshPwaAlerts?.();
-  const hp = $("#healthPill");
-  const healthState = o.health_state || o.health;
-  hp.className = "ui-chip " + (healthState === "healthy" ? "ok" :
-    healthState === "critical" ? "bad" : healthState === "degraded" ? "warn" : "neutral");
-  hp.textContent = healthState.toUpperCase();
-  hp.title = o.health_summary || "";
+  paintHealthPill({ state: o.health_state || o.health, summary: o.health_summary, age_s: o.age_s });
   $("#lbinfo").textContent = o.lb_ip ? "VIP " + o.lb_ip : "";
   const sv = $("#setVip"), sn = $("#setNodes");
   if (sv) sv.textContent = o.lb_ip || "—";

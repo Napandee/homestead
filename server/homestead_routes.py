@@ -437,6 +437,13 @@ def page_dated(key, fn, seconds=PAGE_SECONDS):
     return (kept[0] if kept and kept[1] is value else time.time()), value
 
 
+def page_kept(key):
+    """page_dated() without reading the cluster: (as_of, value) of the
+    leader's fresh snapshot part, else of the kept read, else None. For a
+    route read on every page that must never wait on a page's build (#940)."""
+    return _snapshot[0](key) or CACHE.kept(key)
+
+
 def page_aged(key, fn, seconds=PAGE_SECONDS):
     """page() for a route whose answer is a dict, with as_of (when its numbers
     were read) and age_s (how long ago that is), so the page can say how old
