@@ -271,6 +271,10 @@ class Kube:
     def _delete(self, req, body, ctype, path):
         if req["name"] is None:
             listing = self._list(req)
+            if not req["ns"] and any(row["metadata"].get("namespace") for row in listing["items"]):
+                # The API server has no deletecollection across all namespaces: 405, nothing removed.
+                raise self._error(405, "MethodNotAllowed", f"the server does not allow this method on the requested resource; "
+                                  f"{self._what(req)} is namespaced, so name a namespace", path)
             for row in listing["items"]:
                 self._remove(dict(req, name=row["metadata"]["name"]), body or {})
             return {"kind": "Status", "apiVersion": "v1", "status": "Success", "metadata": {}}

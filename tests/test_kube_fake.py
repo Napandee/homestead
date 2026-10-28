@@ -286,6 +286,21 @@ class WriteTests(unittest.TestCase):
             self.assertIsNone(kube.object(PODS + "/a"))
             self.assertIsNone(K.delete_if_present(PODS + "/a"))
 
+    def test_deleting_a_collection_removes_its_rows(self):
+        with Kube(pod("a"), pod("b"), pod("c", ns="other"), {"apiVersion": "v1", "kind": "Node", "metadata": {"name": "host-1"}}) as kube:
+            K.ksend("DELETE", PODS)
+            self.assertEqual(names(K.kget(PODS)), [])
+            self.assertEqual(names(K.kget("/api/v1/namespaces/other/pods")), ["c"], "another namespace is left alone")
+            K.ksend("DELETE", NODES)
+            self.assertEqual(names(K.kget(NODES)), [], "a cluster-scoped kind has no namespace to miss")
+
+    def test_the_api_server_does_not_delete_a_namespaced_kind_across_all_namespaces(self):
+        with Kube(pod("a"), pod("c", ns="other")) as kube:
+            with self.assertRaises(urllib.error.HTTPError) as caught:
+                K.ksend("DELETE", "/api/v1/pods")
+            self.assertEqual(caught.exception.code, 405)
+            self.assertEqual(names(K.kget("/api/v1/pods")), ["a", "c"], "nothing is removed")
+
     def test_deleting_an_owner_takes_what_it_alone_owns(self):
         owner = pod("owner", uid="u1")
         owned = pod("owned", ownerReferences=[{"uid": "u1"}])
