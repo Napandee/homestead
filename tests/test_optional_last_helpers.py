@@ -20,6 +20,8 @@ from unittest import mock
 
 SERVER = Path(os.environ.get("HOMESTEAD_TEST_SERVER_DIR", str(Path(__file__).resolve().parents[1] / "server")))
 sys.path.insert(0, str(SERVER))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import source_scan as SS
 import homestead_disk_v2 as DISK_V2
 import homestead_kube as KUBE
 import homestead_lhv2_upgrade as LHV2_UPGRADE
@@ -64,7 +66,7 @@ def functions_comparing_404(source):
             found.update(inside or ("<module>",))
         for child in ast.iter_child_nodes(node):
             visit(child, inside)
-    visit(ast.parse(source), ())
+    visit(SS.tree(SS.code(source)), ())
     return found
 
 
@@ -93,7 +95,7 @@ class NoOwn404CopiesTests(unittest.TestCase):
     def test_only_the_listed_functions_compare_a_status_with_404(self):
         for module, allowed in OWN_404.items():
             with self.subTest(module=module):
-                self.assertEqual(allowed, functions_comparing_404((SERVER / f"{module}.py").read_text()))
+                self.assertEqual(allowed, functions_comparing_404(SS.text(SERVER / f"{module}.py")))
 
     def test_each_helper_reads_through_homestead_kube_with_its_own_reader(self):
         helpers = {
