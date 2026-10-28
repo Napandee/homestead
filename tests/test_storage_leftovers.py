@@ -8,15 +8,15 @@ later attach there fails in a loop. homestead_storage_leftovers reads both;
 it changes nothing."""
 import sys
 import unittest
-import urllib.error
 from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
-import homestead_kube as KUBE
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import homestead_node_probes as NODE_PROBES
 import homestead_routes
 import homestead_storage_leftovers as LEFTOVERS
+from fakes.kube import Kube
 
 GiB = 1024 ** 3
 LH = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system"
@@ -52,21 +52,27 @@ def session(sid, address, volume="pvc-a", state="LOGGED_IN", disks=("sdj",)):
 
 
 class Cluster:
-    def __init__(self, pvs=(), replicas=(), ims=(), probes=None, fail=(), claims=()):
-        self.lists = {"/api/v1/persistentvolumes": list(pvs), f"{LH}/replicas": list(replicas), PODS: list(ims),
-                      "/api/v1/persistentvolumeclaims": list(claims)}
-        self.probes, self.fail = probes or {}, set(fail)
+    """The volumes, copies, instance managers and claims above on the shared fake API server
+    (tests/fakes/kube.py); fail names list paths the API server answers 403."""
 
-    def kget(self, path, timeout=10):
-        if path in self.fail:
-            raise urllib.error.HTTPError(path, 403, "forbidden", {}, None)
-        if path not in self.lists:
-            raise AssertionError("unexpected read " + path)
-        return {"items": self.lists[path], "metadata": {}}
+    def __init__(self, pvs=(), replicas=(), ims=(), probes=None, fail=(), claims=()):
+        def made(kind, version, objects, namespace=None):
+            for obj in objects:
+                obj = {**obj, "apiVersion": version, "kind": kind}
+                if namespace:
+                    obj["metadata"] = {**obj["metadata"], "namespace": namespace}
+                yield obj
+        self.kube = Kube(*made("PersistentVolume", "v1", pvs),
+                         *made("Replica", "longhorn.io/v1beta2", replicas, "longhorn-system"),
+                         *made("Pod", "v1", ims, "longhorn-system"),
+                         *made("PersistentVolumeClaim", "v1", claims))
+        for path in fail:
+            self.kube.fail(path.partition("?")[0], 403, times=100)
+        self.probes = probes or {}
 
     def __enter__(self):
-        self.patches = [mock.patch.object(KUBE, "kget", self.kget),
-                        mock.patch.object(NODE_PROBES, "node_temps", lambda *a, **k: self.probes),
+        self.kube.__enter__()
+        self.patches = [mock.patch.object(NODE_PROBES, "node_temps", lambda *a, **k: self.probes),
                         mock.patch.object(homestead_routes, "cached", lambda key, seconds, fn: fn())]
         for p in self.patches:
             p.start()
@@ -75,6 +81,7 @@ class Cluster:
     def __exit__(self, *exc):
         for p in self.patches:
             p.stop()
+        return self.kube.__exit__(*exc)
 
 
 class ReleasedVolumes(unittest.TestCase):
