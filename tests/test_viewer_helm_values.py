@@ -13,16 +13,17 @@ field's name and size."""
 import copy
 import sys
 import unittest
-import urllib.error
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import homestead_agent_tools as TOOLS
 import homestead_auth as AUTH
 import homestead_overview_server as OVERVIEW
 import homestead_resources as RES
 import homestead_routes as ROUTER
 import server  # noqa: F401  (binds the agent tools and the route table)
+from fakes.kube import Kube
 
 VALUES = "auth:\n  adminPassword: hunter2\n  token: s3cr3t-t0ken\n"
 USER_DATA = "#cloud-config\npassword: hunter2\nchpasswd: { expire: False }\n"
@@ -249,8 +250,20 @@ NOTE = "••• (hidden: needs the admin role"
 
 
 class Cluster:
+    """The objects above on the shared fake API server (tests/fakes/kube.py), which answers the object reads
+    (and their 404s). Discovery stays ours: the fake's /apis lists no resources."""
+
     def __init__(self):
-        self.objects, self.sent = copy.deepcopy(OBJECTS), []
+        self.kube, self.sent = Kube(*copy.deepcopy(list(OBJECTS.values()))), []
+
+    @property
+    def objects(self):
+        return {path: self.kube.object(path) for path in OBJECTS}
+
+    def change(self, path, mutate):
+        obj = self.kube.object(path)
+        mutate(obj)
+        self.kube.add(obj)
 
     def discovery(self):
         kinds = {}
@@ -267,9 +280,7 @@ class Cluster:
             if path == (f"/api/{version}" if not group else f"/apis/{group}/{version}"):
                 return {"resources": [{"name": r, "kind": k, "namespaced": True, "verbs": ["get", "list", "update", "create"]}
                                       for r, k in resources.items()]}
-        if path in self.objects:
-            return copy.deepcopy(self.objects[path])
-        raise urllib.error.HTTPError(path, 404, "not found", {}, None)
+        return self.kube("GET", path)
 
     def send(self, method, path, body=None, **kwargs):
         self.sent.append((method, path, copy.deepcopy(body)))
@@ -476,13 +487,13 @@ class TheResourceBrowser(Base):
         self.assertEqual([{"name": "vm1-cloudinit", "data": {"userdata": "•••"}}], raw["status"]["secretBackups"])
 
     def test_a_job_found_by_its_template_label_alone(self):
-        job = self.c.objects["/apis/batch/v1/namespaces/kube-system/jobs/helm-install-app"]
-        del job["metadata"]["ownerReferences"]
+        self.c.change("/apis/batch/v1/namespaces/kube-system/jobs/helm-install-app",
+                      lambda job: job["metadata"].pop("ownerReferences"))
         self.assertNoSecrets(self.route("/api/resources/object", "helm-install Job", "viewer"))
 
     def test_kubectls_last_applied_copy_never_reaches_anyone(self):
-        cm = self.c.objects["/api/v1/namespaces/lab/configmaps/cfg"]
-        cm["metadata"]["annotations"]["kubectl.kubernetes.io/last-applied-configuration"] = '{"password":"hunter2"}'
+        self.c.change("/api/v1/namespaces/lab/configmaps/cfg", lambda cm: cm["metadata"]["annotations"].update(
+            {"kubectl.kubernetes.io/last-applied-configuration": '{"password":"hunter2"}'}))
         for role in AUTH.ROLES:
             self.assertNoSecrets(self.route("/api/resources/object", "/api/v1/namespaces/lab/configmaps/cfg", role))
 
@@ -493,7 +504,8 @@ class TheResourceBrowser(Base):
         self.assertEqual(once, twice)
 
     def test_an_empty_field_is_left_as_it_is(self):
-        self.c.objects["/apis/helm.cattle.io/v1/namespaces/kube-system/helmchartconfigs/traefik"]["spec"]["valuesContent"] = ""
+        self.c.change("/apis/helm.cattle.io/v1/namespaces/kube-system/helmchartconfigs/traefik",
+                      lambda config: config["spec"].update(valuesContent=""))
         answer = self.route("/api/resources/object", "HelmChartConfig", "viewer")
         self.assertEqual("", answer["object"]["spec"]["valuesContent"])
         self.assertFalse(answer["values_hidden"])
