@@ -13,7 +13,7 @@
 (function () {
   const DAY = 86400000, WEEK = 7 * DAY, FREQUENT = 6;
   const DAY_NAMES = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
-  const LABELS = { lh: "Longhorn's recurring jobs", crons: "CronJobs", power: "power schedules",
+  const LABELS = { lh: "Longhorn's recurring jobs and Homestead's weekly trim", crons: "CronJobs", power: "power schedules",
     os: "host OS update settings", settings: "the maintenance window", workloads: "the apps list", copies: "volume copies" };
   const TASK_WORDS = { backup: "backup", "backup-force-create": "backup", snapshot: "snapshot", "snapshot-force-create": "snapshot",
     "snapshot-cleanup": "snapshot cleanup", "snapshot-delete": "snapshot delete", "filesystem-trim": "trim" };

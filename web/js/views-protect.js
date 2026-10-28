@@ -1073,7 +1073,7 @@ function weeklyTrimCard(d) {
     <div class="card flat">
       <div class="between wt-head"><div><div class="ctitle">Weekly trim</div>
         <div class="csub">Every attached volume, ${TRIM_DAYS[slot.weekday]}s at ${trimHour(slot.hour)} UTC${d.enabled && d.next ? ` · next ${esc(fmtAt(d.next))}` : ""}</div></div>
-        <div class="row" style="gap:8px">${status}${d.running ? "" : '<button class="btn sm" data-need="operator" onclick="weeklyTrimRun()">Run now</button>'}<button class="btn sm" data-need="admin" onclick="weeklyTrimTime()">Change time</button></div></div>
+        <div class="row" style="gap:8px">${status}${d.running ? "" : '<button class="btn sm" data-need="operator" onclick="weeklyTrimRun()">Run now</button>'}${d.theirs ? "" : '<button class="btn sm" data-need="admin" onclick="weeklyTrimTime()">Change time</button>'}</div></div>
       <div style="margin-top:10px">${lines}</div>
       ${d.theirs ? `<div class="dim xs wt-line">Your trim job <span class="mono">${esc(d.theirs)}</span> already trims the default group, so this one does not run as well. Delete it under Recurring jobs to let Homestead trim attached volumes instead: Longhorn's fails on detached volumes and VM disks.</div>` : ""}
       <div class="between wt-foot"><label class="switch" data-need="admin"><input type="checkbox" id="wt_on" ${d.enabled ? "checked" : ""} onchange="weeklyTrimSwitch(this.checked)"> Trim weekly</label>

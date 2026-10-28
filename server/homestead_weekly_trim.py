@@ -389,8 +389,10 @@ def schedule(volumes, jobs):
     #927), or None while it does not run: switched off, or a trim job of the
     user's covers the default group. volumes are Longhorn's volume rows,
     jobs its recurring job rows. It trims the volumes attached now that have
-    a filesystem; PVs that cannot be read count every attached one, as a run
-    does."""
+    a filesystem (a PV is matched by the volume's name, as Longhorn names the
+    PVs it provisions); PVs that cannot be read count every attached one, as a
+    run does. A state file that cannot be read reads as the default: on, at
+    Saturday 04:00, as last_state() answers for the Dashboard."""
     state = last_state()
     if state.get("enabled") is False or any(j.get("task") == "filesystem-trim" and "default" in (j.get("groups") or [])
                                             for j in jobs):

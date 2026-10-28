@@ -55,6 +55,8 @@ test("off, never run, running, and a trim job of the user's each say so", () => 
   assert.doesNotMatch(running, /weeklyTrimRun\(\)/, "no second Run now while one runs");
   assert.match(ctx.weeklyTrimCard({ enabled: true, next: "x", last: null, running: false, theirs: "my-trim" }),
     /my-trim.*already trims the default group/);
+  assert.doesNotMatch(ctx.weeklyTrimCard({ enabled: true, next: "x", last: null, running: false, theirs: "my-trim" }), /Change time/,
+    "moving a trim that does not run would change nothing");
   // #927: a job an older Housekeeping plan made is the usual one; the card says how to hand the trim back.
   assert.match(ctx.weeklyTrimCard({ enabled: true, next: "x", last: null, running: false, theirs: "weekly-trim" }),
     /Delete it under Recurring jobs to let Homestead trim attached volumes instead/);

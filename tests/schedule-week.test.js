@@ -167,7 +167,7 @@ test("each source that could not be read is named; one that does not apply is no
   const { W } = setup();
   const week = W.collect({ lh: { failed: "timed out" }, crons: { error: "forbidden" }, power: "nonsense",
     os: { failed: "x" }, settings: { failed: "x" } }, FROM);
-  same(week.unread, ["Longhorn's recurring jobs", "CronJobs", "power schedules", "host OS update settings", "the maintenance window"]);
+  same(week.unread, ["Longhorn's recurring jobs and Homestead's weekly trim", "CronJobs", "power schedules", "host OS update settings", "the maintenance window"]);
   same(W.collect({ lh: null }, FROM).unread, []);
 });
 
@@ -336,4 +336,12 @@ test("review: a stop at the backup's own start minute is close, and so is one kn
     { kind: "app", ns: "other", name: "db", next: [{ at: SAT_0200 + 300.4, action: "stop" }] }] } }, FROM);
   same(next.overlaps.map(o => o.reason), ["app db stops during its backup nightly"]);
   same(next.items.filter(i => i.kind === "Power").map(i => i.clash), ["close", ""], "only the app in lab, not its namesake in other");
+});
+
+test("unread Longhorn jobs say Homestead's weekly trim is missing too, since it is read with them (#927)", async () => {
+  const { ctx, out } = setup({ "/api/lh/overview": { jobs: [], clashes: [], volumes: [], homestead_jobs: [], jobs_unread: "forbidden" },
+    "/api/schedules": [], "/api/power-schedules": { items: [] },
+    "/api/os-updates": { applies: false }, "/api/settings": { updates: { policy: "notify_only" }, placement: {} }, "/api/workloads": [] });
+  await ctx.viewScheduleWeek();
+  assert.match(out.html, /Could not read Longhorn's recurring jobs and Homestead's weekly trim/);
 });
