@@ -2837,15 +2837,22 @@ ssh_pwauth: true
     },
     "/api/timeline/seen": () => ({ ok: true, since: Math.round(Date.now() / 1000 - 2.6 * 86400) }),
     // The summary push (#921): the demo person gets one on Sunday evenings; a
-    // change lasts until the page reloads. Next is the next hour, near enough.
+    // change lasts until the page reloads. Next is worked out in this browser's
+    // own time, near enough for a demo (the server uses the chosen zone).
     "/api/timeline/summary": (url, init) => {
-      const now = Math.round(Date.now() / 1000), next = (Math.floor(now / 3600) + 1) * 3600;
+      const nextOf = s => {
+        const at = new Date(); at.setMinutes(0, 0, 0); at.setHours(s.hour);
+        while (at <= new Date() || (s.every === "weekly" && (at.getDay() + 6) % 7 !== s.day)) at.setDate(at.getDate() + 1);
+        return Math.round(at / 1000);
+      };
       if (init?.method === "POST") {
         const body = JSON.parse(init.body || "{}");
-        demoState.summary = body.every === "off" ? { every: "off" } : { ...body, day: body.day ?? 0, next };
+        demoState.summary = body.every === "off" ? { every: "off" } : { ...body, day: body.day ?? 0 };
       }
-      return demoState.summary || { every: "weekly", day: 6, hour: 18, tz: "Europe/London", next,
-        sent_at: now - 3 * 86400, result: "sent to 2 devices" };
+      const s = demoState.summary || { every: "weekly", day: 6, hour: 18, tz: "Europe/London", result: "sent to 2 devices" };
+      if (s.every === "off") return s;
+      const next = nextOf(s);
+      return { ...s, next, sent_at: s.result ? next - 7 * 86400 + 40 : undefined };
     },
     "/api/changes/undo": (url, init) => ({ ok: true, detail: `${JSON.parse(init?.body || "{}").name} is back to its settings from before that change; its pods are being replaced` }),
     // The storage forecast (homestead_forecast.py): frigate's config filling in
