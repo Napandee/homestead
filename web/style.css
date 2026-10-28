@@ -220,7 +220,8 @@ html{scrollbar-color:var(--scroll-thumb) transparent}
 .sidefoot{padding:16px 18px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:9px}
 /* The health pill (#940). Dashed is "not there yet" (design.md): not read yet
    or unreadable (pending), or a verdict a minute old (stale, in its own tone).
-   Starting, updating, repairing or maintenance is no fault (#941), so neutral, with a dot that pulses so it
+   Starting, updating, repairing or maintenance is no fault (#941), so
+   neutral, with a dot that pulses so it
    does not read as "not loaded"; still when motion is off or reduced. */
 #healthPill.pending,#healthPill.stale{border-style:dashed;border-color:currentColor;background:transparent}
 #healthPill.busy::before{content:"";width:7px;height:7px;border-radius:50%;margin-right:7px;background:currentColor;animation:hpPulse 1.6s ease-in-out infinite}

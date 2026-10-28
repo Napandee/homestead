@@ -64,8 +64,8 @@ function dashboardAlert(items) {
    from its overview; every page from each /api/alerts read (pwa.js), which
    carries the same verdict. Colour is the verdict; starting, updating,
    repairing (a volume rebuilding a copy) and maintenance (a host Homestead is
-   working on) are not faults (#941), so they stay neutral with a pulsing dot. Dashed is "not there
-   yet": CHECKING before the first answer, UNKNOWN when there is no verdict
+   working on) are not faults (#941), so they stay neutral with a pulsing
+   dot. Dashed is "not there yet": CHECKING before the first answer, UNKNOWN when there is no verdict
    (null, or the server's "unknown"), and the last verdict once it is a
    minute old. h undefined (a server without the field) leaves the pill be. */
 function paintHealthPill(h) {

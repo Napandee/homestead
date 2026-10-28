@@ -298,7 +298,8 @@ def classify_cluster_health(nodes, workloads, volumes, startup_grace=300, protec
     issues, activities = list(protection or []), []
     for node in nodes:
         name = node.get("name", "unknown")
-        if node.get("status") != "Ready" and name in maintenance:
+        if name in maintenance:
+            # Ready or not: a drain says so too, not only the reboot.
             activities.append({"state": "maintenance", "kind": "Node", "name": name,
                                "reason": "in maintenance: Homestead is working on this host"})
         elif node.get("status") != "Ready":
@@ -327,7 +328,8 @@ def classify_cluster_health(nodes, workloads, volumes, startup_grace=300, protec
             elif repairing:
                 issues.append({"severity": "degraded", "kind": "Volume", "name": label,
                                "reason": f"still rebuilding a copy after {_span(now - since)} "
-                                         f"({int(rebuild.get('pct') or 0)}% done)"})
+                                         f"({int(rebuild.get('pct') or 0)}% done)",
+                               "for_s": int(now - since - REPAIR_GRACE)})
             else:
                 issues.append({"severity": "degraded", "kind": "Volume", "name": label,
                                "reason": "Longhorn is rebuilding or missing a replica"})
@@ -358,7 +360,8 @@ def classify_cluster_health(nodes, workloads, volumes, startup_grace=300, protec
                                "reason": f"{ready}/{desired} replicas ready"})
         else:
             issues.append({"severity": "degraded", "kind": "Workload", "name": resource,
-                           "reason": f"only {ready}/{desired} replicas ready, not ready for {_span(age)}"})
+                           "reason": f"only {ready}/{desired} replicas ready, not ready for {_span(age)}",
+                           "for_s": age - startup_grace})
     return verdict(issues, activities)
 
 
@@ -383,31 +386,42 @@ class HealthHold:
     issue counts once it has lasted the hold, and keeps counting for the hold
     after it is gone, so a 30 s blip never turns the pill and a fault that
     flickers does not flicker it. One that goes before it counts starts over
-    when it comes back, as an alert does. An urgent issue (a host whose
-    maintenance overran) counts at once, as its alert is raised at once.
-    Critical is held too: alerts hold a host not ready for 60 s as well.
+    when it comes back, as an alert does, so one that keeps coming and going
+    faster than the hold is not counted, as it is not alerted. An urgent
+    issue (a host whose maintenance overran) counts at once, as its alert is
+    raised at once. Critical is held too: alerts hold a host not ready for
+    60 s as well.
 
-    Kept on the replica that builds the overview (the leader's page
-    snapshot); a new leader starts every hold over, so a lasting fault is
-    hidden at most one more hold after a leader change."""
+    An issue that carries its own clock (for_s: a workload past its start-up
+    grace, a rebuild past REPAIR_GRACE) has lasted that long already, so it is
+    not held again. The others are timed here, on the replica that builds the
+    overview (the leader's page snapshot): after a leader change, or on a
+    replica that builds it rarely, they are held one hold from when it first
+    sees them. When it has not looked for longer than the hold, every row
+    starts over, as nothing says what happened in between."""
 
     def __init__(self, hold=None):
         self.hold = ALERTS.HOLD if hold is None else hold
         self.rows = {}
+        self.last = None   # when it last looked
         self.lock = threading.Lock()
 
     def apply(self, report, now=None):
         """report with the verdict from the issues that count; current_issues
         is this cycle's own, which alerts read, as they hold them themselves."""
-        now = time.time() if now is None else now
         current = report.get("health_issues") or []
         with self.lock:
+            now = time.time() if now is None else now
+            if self.last is not None and now - self.last > self.hold:
+                self.rows.clear()
+            self.last = now
             seen = {}
             for issue in current:
                 seen.setdefault(f"{issue.get('kind', '')}:{issue.get('name', '')}", []).append(issue)
             for key, rows in seen.items():
                 row = self.rows.setdefault(key, {"since": now})
-                row.update(issues=rows, gone=None)
+                own = max((x["for_s"] for x in rows if isinstance(x.get("for_s"), (int, float))), default=0)
+                row.update(issues=rows, gone=None, since=min(row["since"], now - max(0, own)))
                 if now - row["since"] >= self.hold or any(x.get("urgent") for x in rows):
                     row["counted"] = True
             for key in [key for key in self.rows if key not in seen]:

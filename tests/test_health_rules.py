@@ -134,9 +134,14 @@ class MaintenanceTests(unittest.TestCase):
         result = classify([node("node-1", "NotReady")], [], [], overran={"node-1"})
         self.assertTrue(result["health_issues"][0].get("urgent"))
 
+    def test_a_ready_host_in_maintenance_still_says_so(self):
+        result = classify([node("node-1")], [], [], maintenance={"node-1"})
+        self.assertEqual("maintenance", result["health_state"])
+
     def test_the_overview_reads_homesteads_maintenance(self):
         import homestead_overview_server as OV
         with mock.patch.object(OV.HISTORY, "maintenance_view", return_value=({"node-1"}, set())), \
+                mock.patch.object(CLUSTER, "HOLD", CLUSTER.HealthHold()), \
                 mock.patch.object(OV.NETWORK, "shared_vip", return_value=""):
             ov = OV.get_overview(nodes=[{**node("node-1", "NotReady"), "cpu_cap": 4, "cpu_used": 1,
                                          "mem_cap_gb": 8, "mem_used_gb": 2}],
@@ -202,6 +207,74 @@ class HoldTests(unittest.TestCase):
         issue = {"severity": "critical", "kind": "Volume", "name": "data", "reason": "faulted"}
         facts = ALERTS.health_facts({"health_issues": [], "current_issues": [issue]})
         self.assertEqual(["health:Volume:data"], [f["key"] for f in facts if "key" in f])
+
+    def test_a_repairing_volume_rings_no_bell(self):
+        """S2 changes the issues themselves, so the bell follows the pill."""
+        volume = {"name": "pvc-a", "pvc_name": "data", "robustness": "degraded", "degraded_since": 0,
+                  "rebuild": {"pct": 40, "replicas": 1, "error": ""}}
+        report = self.hold.apply(classify([node()], [], [volume], now=300), now=300)
+        self.assertEqual([], [f for f in ALERTS.health_facts(report) if "key" in f])
+
+    def test_a_counted_fault_that_flickers_stays_counted(self):
+        for at in (0, 20, 40, 60):
+            self.cycle(at, volume=True)
+        self.cycle(80)
+        self.assertEqual("critical", self.cycle(100, volume=True)["health_state"])
+        self.assertEqual("critical", self.cycle(150)["health_state"])
+
+    def test_a_worse_severity_on_a_counted_issue_shows_at_once(self):
+        disk = lambda severity: node() | {"disk_issues": [{"disk": "sda", "severity": severity, "reason": "SMART"}]}
+        for at in (0, 60):
+            state = self.hold.apply(classify([disk("degraded")], [], []), now=at)["health_state"]
+        self.assertEqual("degraded", state)
+        self.assertEqual("critical", self.hold.apply(classify([disk("critical")], [], []), now=80)["health_state"])
+
+    def test_a_row_not_looked_at_for_longer_than_the_hold_starts_over(self):
+        """A replica that builds the overview rarely: a blip it saw an hour
+        ago and one it sees now are not one fault."""
+        self.cycle(0, volume=True)
+        self.assertEqual("healthy", self.cycle(3600, volume=True)["health_state"])
+
+    def test_a_fault_with_its_own_clock_is_not_held_again(self):
+        """A workload past its grace, or a rebuild past 30 min, has been a
+        fault for that long already: a rarely-run overview, or a new
+        leader, counts it at once."""
+        stalled = {"ns": "lab", "name": "web", "desired": 1, "ready": 0, "available": 0, "updated": 1,
+                   "generation": 1, "observed_generation": 1, "transition_age": 300 + 90, "problems": []}
+        self.assertEqual("degraded", self.hold.apply(classify([node()], [stalled], []), now=0)["health_state"])
+        just = dict(stalled, name="api", transition_age=300 + 20)
+        self.assertEqual("degraded", self.hold.apply(classify([node()], [just], []), now=0)["health_state"])
+        fresh = CLUSTER.HealthHold()
+        self.assertEqual("healthy", fresh.apply(classify([node()], [just], []), now=0)["health_state"])
+        self.assertEqual("degraded", fresh.apply(classify([node()], [dict(just, transition_age=360)], []),
+                                                 now=40)["health_state"])
+        volume = {"name": "pvc-a", "pvc_name": "data", "robustness": "degraded", "degraded_since": 0,
+                  "rebuild": {"pct": 40, "replicas": 1, "error": ""}}
+        late = CLUSTER.REPAIR_GRACE + 120
+        self.assertEqual("degraded", CLUSTER.HealthHold().apply(classify([node()], [], [volume], now=late),
+                                                                 now=late)["health_state"])
+
+
+class CrashLoopTests(unittest.TestCase):
+    """S1 must not hide a crash loop: its back-off is a problem, which skips
+    the start-up grace whatever the Ready clock says."""
+
+    def test_a_crash_loop_in_a_fresh_ready_transition_is_still_degraded(self):
+        workload = {"ns": "lab", "name": "web", "desired": 1, "ready": 0, "available": 0, "updated": 1,
+                    "generation": 1, "observed_generation": 1, "transition_age": 5,
+                    "problems": ["web-5d-abcde: CrashLoopBackOff"]}
+        result = classify([node()], [workload], [])
+        self.assertEqual("degraded", result["health_state"])
+        self.assertIn("CrashLoopBackOff", result["health_summary"])
+
+
+class SetupHealthStepTests(unittest.TestCase):
+    def test_the_setup_guide_reads_this_cycles_issues(self):
+        """The setup guide's health step is a checklist, not the pill: a
+        fault the verdict still holds is not "done"."""
+        import homestead_setup as SETUP
+        source = Path(SETUP.__file__).read_text(encoding="utf-8")
+        self.assertIn('ov.get("current_issues"', source)
 
 
 if __name__ == "__main__":
