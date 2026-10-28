@@ -124,7 +124,7 @@ class AWorkloadOnlyAnAdminMayEdit(Base):
 
 class SavingTheMask(Base):
     def save(self, env):
-        lifecycle.edit_workload({"ns": "lab", "name": "tunnel", "containers": [
+        WEDIT.edit_workload({"ns": "lab", "name": "tunnel", "containers": [
             {"original_name": "cloudflared", "name": "cloudflared", "env": env}]})
 
     def test_an_unchanged_masked_value_keeps_what_the_secret_holds(self):
@@ -198,6 +198,55 @@ class AnAgentsKey(Base):
     def test_a_key_that_can_save_them_gets_them(self):
         answer = self.settings("operator", ["containers:manage", "containers:control", "read"])
         self.assertEqual("s3cret-first", answer["containers"][0]["env"]["TUNNEL_TOKEN"])
+
+
+class AnAgentsKeyOnAWorkloadOnlyAnAdminMayEdit(AnAgentsKey):
+    def setUp(self):
+        Base.setUp(self, service_account="robot")
+        self.bound = dict(TOOLS._bound)
+        TOOLS.bind(ROUTE_POLICY.role, lambda m, p, b: None, self.store.read, lambda *a: None)
+
+    def test_a_key_that_can_save_them_gets_them(self):
+        answer = self.settings("operator", ["containers:manage", "containers:control", "read"])
+        self.assertNotIn("s3cret-first", json.dumps(answer))
+
+
+class MoreThanOneContainer(Base):
+    """The mask keeps only what that container's own variable holds."""
+
+    def setUp(self):
+        super().setUp()
+        self.store.objects[DEP]["spec"]["template"]["spec"]["containers"].append(
+            {"name": "sidecar", "image": "busybox:1.36", "env": [{"name": "TZ", "value": "UTC"}]})
+
+    def test_the_mask_in_another_container_is_refused(self):
+        with self.assertRaisesRegex(ValueError, "hidden"):
+            WEDIT.edit_workload({"ns": "lab", "name": "tunnel", "containers": [
+                {"original_name": "cloudflared", "name": "cloudflared", "env": {"TUNNEL_TOKEN": ENVSEC.MASK}},
+                {"original_name": "sidecar", "name": "sidecar", "env": {"TUNNEL_TOKEN": ENVSEC.MASK}}]})
+
+    def test_a_renamed_container_keeps_its_masked_value(self):
+        WEDIT.edit_workload({"ns": "lab", "name": "tunnel", "containers": [
+            {"original_name": "cloudflared", "name": "tunnel", "env": {"TUNNEL_TOKEN": ENVSEC.MASK}},
+            {"original_name": "sidecar", "name": "sidecar", "env": {"TZ": "UTC"}}]})
+        self.assertEqual(b64("s3cret-first"), self.store.objects[SECRET]["data"]["cloudflared.TUNNEL_TOKEN"])
+        self.assertNotIn(ENVSEC.MASK, json.dumps(self.store.objects[DEP]))
+
+
+class TheOlderSingleContainerBody(Base):
+    def test_a_masked_value_keeps_what_the_secret_holds(self):
+        WEDIT.edit_workload({"ns": "lab", "name": "tunnel", "env": {"TUNNEL_TOKEN": ENVSEC.MASK, "TZ": "UTC"}})
+        self.assertEqual(b64("s3cret-first"), self.store.objects[SECRET]["data"]["cloudflared.TUNNEL_TOKEN"])
+        self.assertNotIn(ENVSEC.MASK, json.dumps(self.store.objects[DEP]))
+
+
+class ASecretHomesteadDidNotMake(Base):
+    """values() shows only the Secret Homestead keeps for the app (its label),
+    as held() and externalize() do - not one an annotation points it at."""
+
+    def test_its_values_are_not_shown(self):
+        self.store.objects[SECRET]["metadata"]["labels"] = {}
+        self.assertNotIn("s3cret-first", json.dumps(self.form("admin")))
 
 
 if __name__ == "__main__":

@@ -189,7 +189,9 @@ def values(ns, dep, read):
     if not name:
         return {}
     try:
-        data = read(f"/api/v1/namespaces/{ns}/secrets/{name}").get("data") or {}
+        # Only the Secret Homestead keeps for the app (its label), as held()
+        # and externalize() check: never one the annotation was pointed at.
+        data = _ours(read(f"/api/v1/namespaces/{ns}/secrets/{name}"), dep)
     except Exception:
         return {}
     out = {}
