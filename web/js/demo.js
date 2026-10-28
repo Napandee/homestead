@@ -2836,6 +2836,17 @@ ssh_pwauth: true
         entries: all, counts, more: 0, unread };
     },
     "/api/timeline/seen": () => ({ ok: true, since: Math.round(Date.now() / 1000 - 2.6 * 86400) }),
+    // The summary push (#921): the demo person gets one on Sunday evenings; a
+    // change lasts until the page reloads. Next is the next hour, near enough.
+    "/api/timeline/summary": (url, init) => {
+      const now = Math.round(Date.now() / 1000), next = (Math.floor(now / 3600) + 1) * 3600;
+      if (init?.method === "POST") {
+        const body = JSON.parse(init.body || "{}");
+        demoState.summary = body.every === "off" ? { every: "off" } : { ...body, day: body.day ?? 0, next };
+      }
+      return demoState.summary || { every: "weekly", day: 6, hour: 18, tz: "Europe/London", next,
+        sent_at: now - 3 * 86400, result: "sent to 2 devices" };
+    },
     "/api/changes/undo": (url, init) => ({ ok: true, detail: `${JSON.parse(init?.body || "{}").name} is back to its settings from before that change; its pods are being replaced` }),
     // The storage forecast (homestead_forecast.py): frigate's config filling in
     // eleven days, a disk in six weeks, the pool steady.
