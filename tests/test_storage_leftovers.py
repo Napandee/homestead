@@ -52,8 +52,9 @@ def session(sid, address, volume="pvc-a", state="LOGGED_IN", disks=("sdj",)):
 
 
 class Cluster:
-    def __init__(self, pvs=(), replicas=(), ims=(), probes=None, fail=()):
-        self.lists = {"/api/v1/persistentvolumes": list(pvs), f"{LH}/replicas": list(replicas), PODS: list(ims)}
+    def __init__(self, pvs=(), replicas=(), ims=(), probes=None, fail=(), claims=()):
+        self.lists = {"/api/v1/persistentvolumes": list(pvs), f"{LH}/replicas": list(replicas), PODS: list(ims),
+                      "/api/v1/persistentvolumeclaims": list(claims)}
         self.probes, self.fail = probes or {}, set(fail)
 
     def kget(self, path, timeout=10):
@@ -85,7 +86,7 @@ class ReleasedVolumes(unittest.TestCase):
         self.assertEqual([{
             "pv": "pvc-a", "namespace": "media", "claim": "photos", "class": "longhorn", "policy": "Retain",
             "size": "40Gi", "size_bytes": 40 * GiB, "released_at": "2026-10-16T02:39:48Z", "driver": "driver.longhorn.io",
-            "longhorn": "pvc-a", "hosts": ["node-1", "node-2"], "allocated_bytes": 80 * GiB, "old_copy": False}],
+            "longhorn": "pvc-a", "hosts": ["node-1", "node-2"], "allocated_bytes": 80 * GiB, "old_copy": False, "claim_reused": False}],
             found["volumes"])
 
     def test_a_volume_whose_class_deletes_it_is_not_one_that_is_kept(self):
@@ -109,6 +110,17 @@ class ReleasedVolumes(unittest.TestCase):
         with Cluster([pv("pvc-a", size="40Gi")], fail={f"{LH}/replicas"}):
             row = LEFTOVERS.facts()["released"]["volumes"][0]
         self.assertEqual((None, 40 * GiB), (row["hosts"], row["allocated_bytes"]))
+
+    def test_a_claim_name_in_use_again_is_said_so_the_delete_is_not_offered_for_it(self):
+        # The reviewed delete looks the claim up by name: a new claim of the
+        # same name is not this volume's, and that review refuses it.
+        again = {"metadata": {"namespace": "media", "name": "photos"}, "spec": {"volumeName": "pvc-new"}}
+        with Cluster([pv("pvc-a")], [replica("pvc-a", "node-1")], claims=[again]):
+            self.assertTrue(LEFTOVERS.facts()["released"]["volumes"][0]["claim_reused"])
+
+    def test_unread_claims_leave_reuse_unknown(self):
+        with Cluster([pv("pvc-a")], [replica("pvc-a", "node-1")], fail={"/api/v1/persistentvolumeclaims"}):
+            self.assertIsNone(LEFTOVERS.facts()["released"]["volumes"][0]["claim_reused"])
 
     def test_unread_volumes_are_unknown_not_none(self):
         with Cluster(fail={"/api/v1/persistentvolumes"}):
@@ -137,6 +149,23 @@ class StaleSessions(unittest.TestCase):
         probes = {"node-1": {"iscsi": [session(1, "192.0.2.42")]}}
         with Cluster(ims=[im("node-1", "192.0.2.41"), im("node-2", "192.0.2.42")], probes=probes):
             self.assertEqual([], LEFTOVERS.facts()["iscsi"]["hosts"])
+
+    def test_an_address_on_a_storage_network_counts_as_the_instance_manager_s(self):
+        # Longhorn's storage network gives instance-managers a second address
+        # (Multus); a session to it is current, not stale.
+        probes = {"node-1": {"iscsi": [session(1, "198.51.100.21")]}}
+        pod = im("node-1", "192.0.2.41")
+        pod["metadata"]["annotations"] = {"k8s.v1.cni.cncf.io/network-status": (
+            '[{"name":"cbr0","ips":["192.0.2.41"]},{"name":"longhorn-system/storage","ips":["198.51.100.21"]}]')}
+        with Cluster(ims=[pod], probes=probes):
+            self.assertEqual([], LEFTOVERS.facts()["iscsi"]["hosts"])
+
+    def test_the_address_of_an_instance_manager_that_has_ended_is_not_current(self):
+        probes = {"node-1": {"iscsi": [session(1, "192.0.2.40")]}}
+        # A pod still terminating may still serve its engines, so it counts.
+        for phase in ("Failed", "Succeeded"):
+            with Cluster(ims=[im("node-1", "192.0.2.41"), im("node-2", "192.0.2.40", phase=phase)], probes=probes):
+                self.assertEqual(1, len(LEFTOVERS.facts()["iscsi"]["hosts"]), phase)
 
     def test_a_host_whose_instance_manager_is_not_running_yet_is_not_judged(self):
         probes = {"node-1": {"iscsi": [session(1, "192.0.2.40")]}}

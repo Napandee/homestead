@@ -22,8 +22,11 @@ async function releasedVolumesReview() {
   if (r.state === "unknown") return modal(title, UI.callout("warn", "Could not read Released volumes", esc(r.error || "")) + UI.actions(UI.cancel("Close")));
   if (!rows.length) return modal(title, UI.empty("No Released volumes: every kept volume has a claim.") + UI.actions(UI.cancel("Close")));
   const n = rows.length, total = leftoverGiB(rows.reduce((sum, v) => sum + (v.allocated_bytes || 0), 0));
+  // The reviewed delete finds the volume's claim by name; a new claim of
+  // that name is another volume's, and that review would refuse it.
   const action = (v, i) => v.old_copy
     ? UI.button("Remove old copy", `releasedVolumeDelete(${i})`, { kind: "danger", attrs: 'data-need="admin"' })
+    : v.longhorn && v.claim_reused ? '<span class="dim xs">Its claim name is in use again: delete it in Longhorn</span>'
     : v.longhorn ? UI.button("Review delete", `releasedVolumeDelete(${i})`, { kind: "danger", attrs: 'data-need="admin"' })
     : '<span class="dim xs">Use your storage\'s own tools</span>';
   const table = UI.table([{ label: "Volume" }, { label: "Class" }, { label: "Holds", className: "mono" }, { label: "Released" }, { label: "" }],
@@ -37,10 +40,11 @@ async function releasedVolumesReview() {
     UI.actions(UI.cancel("Close")), true);
 }
 
-function releasedVolumeDelete(i) {
+async function releasedVolumeDelete(i) {
   const v = releasedVolumesShown[i];
   if (!v) return;
-  if (v.old_copy) return reclassRemoveOld(v.pv);
+  // Its confirmation replaces this list; show the list again once it is done.
+  if (v.old_copy) { await reclassRemoveOld(v.pv); return releasedVolumesReview(); }
   return volumeDelete({ name: v.longhorn, pvc_name: v.claim, namespace: v.namespace });
 }
 
@@ -53,12 +57,18 @@ async function staleSessionsReview(node) {
   const table = UI.table([{ label: "Session", className: "mono" }, { label: "Volume" }, { label: "Was served from", className: "mono" }, { label: "Disks", className: "mono" }],
     sessions.map(s => [esc(s.sid), `${esc(s.claim ? `${s.namespace}/${s.claim}` : s.volume)}<span class="sub">${esc(s.state || "")}</span>`, esc(portal(s)), esc((s.disks || []).join(", ") || "—")]));
   const logout = sessions.map(s => `sudo iscsiadm -m session -r ${s.sid} -u`).join("\n");
-  const force = sessions.flatMap(s => [...(s.disks || []).map(d => `findmnt /dev/${d} || echo 1 | sudo tee /sys/block/${d}/device/delete`),
+  // The disks are found from the session as the host has it when this runs,
+  // never from the names read earlier: once a session is gone, its disk name
+  // can be a live volume's. One with a holder, a mount or a user is skipped.
+  const force = sessions.flatMap(s => [
+    `for b in /sys/class/iscsi_session/session${s.sid}/device/target*/*/block/*; do d=\${b##*/}; ` +
+    `[ -e "$b" ] && [ -z "$(ls /sys/block/$d/holders)" ] && ! findmnt -S /dev/$d >/dev/null && ! sudo fuser -s /dev/$d && ` +
+    `! sudo fuser -s /dev/longhorn/${s.volume} && echo 1 | sudo tee /sys/block/$d/device/delete; done`,
     `sudo iscsiadm -m node -T ${s.target} -p ${portal(s)} -o delete`]).join("\n");
   modal(title, UI.lead(esc(`${node} keeps ${n === 1 ? "a session" : `${n} sessions`} to a Longhorn instance-manager that is gone. Attaching ${n === 1 ? "this volume" : "these volumes"} on ${node} can fail in a loop until ${n === 1 ? "it ends" : "they end"}.`)) + table +
     UI.section("End them on the host", UI.steps([
       { title: `On ${node}, log ${n === 1 ? "it" : "them"} out`, detailHtml: `<pre>${esc(logout)}</pre>` },
-      { title: "If that fails with exit code 32, remove the disks nothing mounts, then the records", detailHtml: `<pre>${esc(force)}</pre>` },
+      { title: "If that fails with exit code 32, remove the session's disks that nothing uses, then its record", detailHtml: `<pre>${esc(force)}</pre>` },
       { title: `Or restart ${node}`, detailHtml: esc("Drain it first from Hosts. The sessions end with the restart.") },
     ])) + UI.more("Why it happens", "<p>Longhorn serves a volume to the host from its instance-manager pod. When a host is lost while a volume's engine runs on it, the instance-manager is replaced, and the host keeps its session to the old address once it comes back. Only the engine that made a session logs it out, and that engine is gone.</p>") +
     UI.actions(UI.cancel("Close")), true);

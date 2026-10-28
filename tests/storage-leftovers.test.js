@@ -63,7 +63,7 @@ function setup(answer) {
     esc: v => String(v ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;"),
     icon: () => "", $: () => null, fmtAgo: s => `${Math.round(s / 86400)}d ago`,
     modal: (title, html) => { modals.push({ title, html }); },
-    volumeDelete: x => calls.push(["volumeDelete", x]), reclassRemoveOld: pv => calls.push(["reclassRemoveOld", pv]),
+    volumeDelete: x => calls.push(["volumeDelete", x]), reclassRemoveOld: async pv => calls.push(["reclassRemoveOld", pv]),
     api: async (path, options) => {
       sent.push({ path, method: options?.method || "GET" });
       if (path !== "/api/storage/leftovers") throw new Error("Unexpected call " + path);
@@ -98,6 +98,22 @@ test("each Longhorn volume opens the reviewed delete; an old copy its removal; a
   assert.match(html, /storage's own tools/);
 });
 
+test("a volume whose claim name is in use again offers no delete, and says why", async () => {
+  // The reviewed delete finds the claim by name and would refuse the new one.
+  const t = setup(facts([scratch("pvc-a", "photos", ["node-1"], { claim_reused: true })]));
+  await t.ctx.releasedVolumesReview();
+  const html = t.modals.at(-1).html;
+  assert.doesNotMatch(html, /data-need="admin"/);
+  assert.match(html, /claim name is in use again/);
+});
+
+test("after an old copy is removed, the list is read again", async () => {
+  const t = setup(facts([scratch("pvc-old", "photos", ["node-1"], { old_copy: true })]));
+  await t.ctx.releasedVolumesReview();
+  await t.ctx.releasedVolumeDelete(0);
+  assert.equal(t.sent.length, 2);
+});
+
 test("the host's sessions are listed with the steps that clear them", async () => {
   const t = setup(facts([], [{ node: "node-2", sessions: [SESSION] }]));
   await t.ctx.staleSessionsReview("node-2");
@@ -105,10 +121,22 @@ test("the host's sessions are listed with the steps that clear them", async () =
   assert.equal(shown.title, "Stale iSCSI sessions · node-2");
   for (const text of ["lab/notes-data", "192.0.2.40:3260", "sdj",
     "sudo iscsiadm -m session -r 67 -u",
-    "echo 1 | sudo tee /sys/block/sdj/device/delete",
     "sudo iscsiadm -m node -T iqn.2019-10.io.longhorn:pvc-c -p 192.0.2.40:3260 -o delete"]) assert.ok(shown.html.includes(text), text);
   assert.match(shown.html, /[Rr]estart/);
   assert.doesNotMatch(shown.html, /data-need/, "Homestead runs nothing on the host");
+});
+
+test("the disks removed are the session's own as the host sees them then, and only ones nothing uses", async () => {
+  // A disk name from the probe can belong to a live volume by the time the
+  // steps run, once the session is logged out: the command finds the disks
+  // from the session itself, and skips any with a holder, a mount or a user.
+  const t = setup(facts([], [{ node: "node-2", sessions: [SESSION] }]));
+  await t.ctx.staleSessionsReview("node-2");
+  const html = t.modals.at(-1).html.replaceAll("&quot;", '"').replaceAll("&gt;", ">").replaceAll("&amp;", "&");
+  assert.ok(html.includes("for b in /sys/class/iscsi_session/session67/device/target*/*/block/*"), html);
+  assert.doesNotMatch(html, /\/sys\/block\/sdj\/device\/delete/);
+  for (const guard of ['ls /sys/block/$d/holders', "findmnt -S /dev/$d", "fuser -s /dev/$d", "fuser -s /dev/longhorn/pvc-c"])
+    assert.ok(html.includes(guard), guard);
 });
 
 test("a host whose sessions have cleared says so", async () => {

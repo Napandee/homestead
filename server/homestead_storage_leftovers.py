@@ -24,6 +24,7 @@ instance-manager runs (one that is starting proves nothing). Logging a
 session out needs iscsiadm on the host, which Homestead does not run: the
 insight gives the steps.
 """
+import json
 import urllib.parse
 
 import homestead_kube as KUBE
@@ -61,6 +62,13 @@ def _released(pvs):
                 copies.setdefault(spec["volumeName"], set()).add(spec["nodeID"])
     except Exception:
         copies = None                 # hosts unknown; the volumes are still named
+    try:
+        # The reviewed delete finds the claim by name: a new claim of that name
+        # is another volume's, and the review refuses it. None: not read.
+        claims = {((c.get("metadata") or {}).get("namespace"), (c.get("metadata") or {}).get("name"))
+                  for c in KUBE.items("/api/v1/persistentvolumeclaims")}
+    except Exception:
+        claims = None
     out = []
     for pv in pvs:
         meta, spec, status = pv.get("metadata") or {}, pv.get("spec") or {}, pv.get("status") or {}
@@ -76,8 +84,21 @@ def _released(pvs):
                     "released_at": status.get("lastPhaseTransitionTime") or meta.get("creationTimestamp", ""),
                     "driver": csi.get("driver", ""), "longhorn": longhorn, "hosts": hosts,
                     "allocated_bytes": _bytes(size) * max(1, len(hosts or ())),
-                    "old_copy": bool((meta.get("annotations") or {}).get(OLD_COPY))})
+                    "old_copy": bool((meta.get("annotations") or {}).get(OLD_COPY)),
+                    "claim_reused": None if claims is None else (claim.get("namespace"), claim.get("name")) in claims})
     return sorted(out, key=lambda r: (-r["allocated_bytes"], r["pv"]))
+
+
+def _network_addresses(pod):
+    """A pod's addresses on extra networks (Multus network-status): Longhorn's
+    storage network gives instance-managers one. Counting them as current
+    can only leave a session unnamed, never name one that is not stale."""
+    raw = ((pod.get("metadata") or {}).get("annotations") or {}).get("k8s.v1.cni.cncf.io/network-status") or ""
+    try:
+        networks = json.loads(raw) if raw else []
+    except ValueError:
+        return set()
+    return {ip for n in networks if isinstance(n, dict) for ip in n.get("ips") or [] if isinstance(ip, str)}
 
 
 def _stale_sessions(pvs):
@@ -92,7 +113,12 @@ def _stale_sessions(pvs):
     current, running = set(), set()
     for pod in pods:
         status = pod.get("status") or {}
+        # An instance-manager that has ended serves nothing, though it may still
+        # report its address; one still terminating may still serve its engines.
+        if status.get("phase") in ("Failed", "Succeeded"):
+            continue
         current |= {a.get("ip") for a in status.get("podIPs") or [] if a.get("ip")} | ({status["podIP"]} if status.get("podIP") else set())
+        current |= _network_addresses(pod)
         if status.get("phase") == "Running" and status.get("podIP"):
             running.add((pod.get("spec") or {}).get("nodeName"))
     claims = {}

@@ -39,6 +39,11 @@ class ISCSIProbeTests(unittest.TestCase):
         self.put(f"class/iscsi_session/session{sid}/state", state)
         for lun, disk in enumerate(disks):
             (self.root / f"sys/class/iscsi_session/session{sid}/device/target3:0:0/3:0:0:{lun}/block/{disk}").mkdir(parents=True)
+        # What the kernel also keeps beside the targets: none of it is a disk.
+        device = self.root / f"sys/class/iscsi_session/session{sid}/device"
+        for other in ("power", "subsystem", f"connection{sid}:0", f"iscsi_session/session{sid}"):
+            (device / other).mkdir(parents=True, exist_ok=True)
+        (device / "uevent").write_text("DEVTYPE=iscsi_session\n")
         conn = f"class/iscsi_connection/connection{sid}:0"
         if persistent:
             self.put(f"{conn}/persistent_address", address)
