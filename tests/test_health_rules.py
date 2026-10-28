@@ -140,13 +140,23 @@ class MaintenanceTests(unittest.TestCase):
 
     def test_the_overview_reads_homesteads_maintenance(self):
         import homestead_overview_server as OV
+
+        class Seen(Exception):
+            pass
+
+        class Hold:
+            # The overview's verdict as it goes into the hold; the rest of
+            # the overview (addresses, totals) is not what this is about.
+            def apply(self, report, now=None):
+                raise Seen(report)
+
         with mock.patch.object(OV.HISTORY, "maintenance_view", return_value=({"node-1"}, set())), \
-                mock.patch.object(CLUSTER, "HOLD", CLUSTER.HealthHold()), \
-                mock.patch.object(OV.NETWORK, "shared_vip", return_value=""):
-            ov = OV.get_overview(nodes=[{**node("node-1", "NotReady"), "cpu_cap": 4, "cpu_used": 1,
-                                         "mem_cap_gb": 8, "mem_used_gb": 2}],
-                                 wl=[], vols=[], pods={"items": []})
-        self.assertEqual("maintenance", ov["health_state"])
+                mock.patch.object(CLUSTER, "HOLD", Hold()), \
+                self.assertRaises(Seen) as seen:
+            OV.get_overview(nodes=[{**node("node-1", "NotReady"), "cpu_cap": 4, "cpu_used": 1,
+                                    "mem_cap_gb": 8, "mem_used_gb": 2}],
+                            wl=[], vols=[], pods={"items": []})
+        self.assertEqual("maintenance", seen.exception.args[0]["health_state"])
 
 
 class HoldTests(unittest.TestCase):
