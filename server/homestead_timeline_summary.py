@@ -43,7 +43,9 @@ KINDS = (("change", "change", "changes"), ("restart", "restart", "restarts"), ("
          ("schedule", "scheduled job run", "scheduled job runs"), ("alert", "alert", "alerts"),
          ("action", "action", "actions"))
 TITLE_MAX = 100
-_lock = SHARED.SharedLock("timeline-summary")
+# Strict: the claim is what keeps two copies from both sending, so it is never
+# quietly a lock of this process only.
+_lock = SHARED.SharedLock("timeline-summary", strict=True)
 _started = []
 _starting = threading.Lock()
 
@@ -146,12 +148,15 @@ def save(user, body, now):
 
     def change(data):
         users = _users(data)
+        old = users.get(user) if isinstance(users.get(user), dict) else {}
         if wanted is None:
             users.pop(user, None)
+        elif all(old.get(k) == v for k, v in wanted.items()):
+            pass            # saved again unchanged: a summary due now still goes
         else:
             # The slot just gone counts as sent: the first summary is the next one.
-            users[user] = {**wanted, "slot": last_slot(wanted, now),
-                           **{k: v for k, v in (users.get(user) or {}).items() if k in ("sent_at", "result")}}
+            users[user] = {**wanted, "slot": max(old.get("slot") or 0, last_slot(wanted, now)),
+                           **{k: v for k, v in old.items() if k in ("sent_at", "result", "upto")}}
         data["users"] = users
         return users.get(user)
 
@@ -174,16 +179,20 @@ def compose(feed, row, since, slot):
     """The push's title, body and link, from a timeline() answer."""
     counts = feed.get("counts") or {}
     unread = [u for u in feed.get("unread") or [] if not u.get("admin_only") and u.get("source") != "last-here"]
-    failed = sum(1 for e in feed.get("entries") or [] if e.get("tone") == "bad")
+    # The feed counts failures over the whole window; its entries stop at 300.
+    known = "failed" in feed or not feed.get("more")
+    failed = feed["failed"] if "failed" in feed else sum(
+        1 for e in feed.get("entries") or [] if e.get("tone") == "bad" and e.get("kind") != "alert")
     parts = [f"{counts[kind]} {one if counts[kind] == 1 else more}" for kind, one, more in KINDS if counts.get(kind)]
     if failed:
         parts.append(f"{failed} failed")
-    elif parts and not unread:
+    elif parts and not unread and known:
         parts.append("nothing failed")
     if not parts:
         parts = ["nothing recorded" if unread else "nothing happened"]
     period = {"daily": "Past day", "weekly": "Past week"}[row["every"]]
-    prefix = period if since == previous_slot(row, slot) else f"Since {_local(since, row)}"
+    # From the last summary, which went out a minute or so after its slot.
+    prefix = period if abs(since - previous_slot(row, slot)) <= 3600 else f"Since {_local(since, row)}"
     title = f"{prefix}: {', '.join(parts)}"
     if len(title) > TITLE_MAX:
         title = title[:TITLE_MAX - 1].rsplit(",", 1)[0] + "…"
@@ -194,10 +203,12 @@ def compose(feed, row, since, slot):
 
 # ----------------------------------------------------------------- sending
 def _since(row, slot):
-    """From the last summary, or a whole period before this one when that is
-    later; never further back than the Timeline reaches."""
+    """Where the last summary ended, so nothing is counted twice; without
+    one, a whole period before this one, or the slot claimed on saving when
+    that is earlier. Never further back than the Timeline reaches."""
     claimed, previous = row.get("slot") or 0, previous_slot(row, slot)
-    return max(claimed if claimed and claimed < previous else previous, slot - TIMELINE.MAX_WINDOW)
+    start = row.get("upto") or (claimed if claimed and claimed < previous else previous)
+    return max(int(start), slot - TIMELINE.MAX_WINDOW)
 
 
 def _claim(user, slot, now):
@@ -207,7 +218,8 @@ def _claim(user, slot, now):
         row = _users(data).get(user)
         if not isinstance(row, dict) or due(row, now) != slot:
             return False
-        row.update(slot=slot, sent_at=int(now), result="")
+        # upto: the summary counted up to now, and the next starts there.
+        row.update(slot=slot, sent_at=int(now), upto=int(now), result="")
         return True
     return SHARED.update_file(_path(), change, _lock, {}, separators=(",", ":"), sort_keys=True, mode=0o600,
                               durable=True)
@@ -249,12 +261,15 @@ def step(now=None, users=None):
     """One round on the leader: each person whose summary is due gets it.
     Returns [(user, what happened)]."""
     now = int(time.time() if now is None else now)
+    rows = _users(SHARED.read_json(_path(), {}))
+    if not rows:
+        return []           # nobody asked: the accounts are not read
     if users is None:
         import homestead_auth as AUTH
         users = AUTH.list_users()
     roles = {u["name"]: u.get("role", "viewer") for u in users}
     done = []
-    for user, row in sorted(_users(SHARED.read_json(_path(), {})).items()):
+    for user, row in sorted(rows.items()):
         if user not in roles or not isinstance(row, dict):
             continue        # an account since removed is sent nothing
         try:
@@ -289,6 +304,18 @@ def start():
             return
         _started.append(threading.Thread(target=run, name="summary-push", daemon=True))
     _started[0].start()
+
+
+def forget_user(user):
+    """An account removed: its setting goes too, so a new account of the same
+    name never inherits summaries it did not ask for. Most people have no
+    row: nothing is locked or written for them."""
+    if user not in _users(SHARED.read_json(_path(), {})):
+        return
+
+    def change(data):
+        _users(data).pop(user, None)
+    SHARED.update_file(_path(), change, _lock, {}, separators=(",", ":"), sort_keys=True, mode=0o600)
 
 
 def _post(request):

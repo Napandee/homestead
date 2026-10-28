@@ -348,8 +348,11 @@ def timeline(user, role, since=None, now=None):
     counts = {}
     for e in entries:
         counts[e["kind"]] = counts.get(e["kind"], 0) + 1
+    # What failed in the whole window (#921's summary): a job, a request; an
+    # alert is counted as an alert, however bad.
+    failed = sum(1 for e in entries if e["tone"] == "bad" and e["kind"] != "alert")
     return {"since": since, "now": now, "last_here": last, "clamped": clamped, "entries": entries[:MAX_ENTRIES],
-            "counts": counts, "more": max(0, len(entries) - MAX_ENTRIES), "unread": unread}
+            "counts": counts, "failed": failed, "more": max(0, len(entries) - MAX_ENTRIES), "unread": unread}
 
 
 def _since(request):

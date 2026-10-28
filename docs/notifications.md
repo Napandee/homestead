@@ -120,8 +120,12 @@ audit log only for admins): "Past day: 3 changes, 1 restart, nothing failed",
 or "Past week: nothing happened". Tapping it opens the Timeline from where the
 summary starts. It adds no record of its own. A source that could not be read
 is named in it ("App restarts could not be read."), never counted as nothing,
-and "nothing failed" is only said when every source was read. A summary is
-kept out of the bell's list, the Timeline and the alert webhook.
+and "nothing failed" is only said when every source was read. "Failed" counts
+failed jobs and requests; alerts are counted as alerts. Each summary starts
+where the last one ended, so nothing is counted twice. A summary is kept out
+of the bell's list, the Timeline and the alert webhook, and the alert log
+keeps only each person's latest one, so summaries never push alerts out of it.
+Removing an account removes its setting.
 
 It is sent once. The setting and the last time sent are kept per person in
 `timeline-summary.json` on Homestead's data volume. The leader marks the

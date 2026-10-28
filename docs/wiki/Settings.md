@@ -496,11 +496,11 @@ signed-in connection. On iPhone, add Homestead to the Home Screen first.
 A push tells you when something starts. To hear how a quiet day or week went
 as well, set **You → Summary push**: Off (the default), Daily, or Weekly on a
 day you choose, at an hour of your time zone. At that time each of your
-devices with notifications on gets one push counting what the
-[Timeline](https://github.com/homestead-lab/homestead/blob/main/docs/notifications.md#summary-push)
+devices with notifications on gets one push counting what the Timeline
 recorded, such as "Past week: 3 changes, 1 restart, nothing failed", and
 tapping it opens the Timeline from there. It is yours alone: everyone sets
-their own, and it counts what your role can see.
+their own, and it counts what your role can see. How it is sent:
+[Summary push](https://github.com/homestead-lab/homestead/blob/main/docs/notifications.md#summary-push).
 
 To get the same alerts in ntfy, Gotify or any webhook, an admin sets
 **Connections → Alert webhook**: its format, the address, which alerts

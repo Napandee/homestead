@@ -222,6 +222,10 @@ def forget_user(user):
 def note(fact, now=None):
     with _lock:
         state = _load()
+        if fact.get("category") == "summary":
+            # A person's newer summary replaces their older one, so summaries
+            # never push real alerts out of the log's LOG_SIZE lines (#921).
+            state["log"] = [e for e in state["log"] if e.get("category") != "summary" or e.get("for") != fact.get("for")]
         entry = _append(state, fact, "raised", now or time.time())
         if fact.get("to"):
             entry["to"] = fact["to"]

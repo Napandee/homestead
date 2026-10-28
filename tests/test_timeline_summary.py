@@ -71,6 +71,16 @@ class ScheduleTests(unittest.TestCase):
                 self.assertEqual(5, len(slots))
                 gaps = [b - a for a, b in zip(sorted(slots), sorted(slots)[1:])]
                 self.assertTrue(all(23 * 3600 <= g <= 25 * 3600 for g in gaps), gaps)
+        # The skipped 01:00 is read with the offset before the change (02:00 BST);
+        # the repeated one is its first time (01:00 BST).
+        self.assertEqual(at(2026, 3, 29, 1), S.last_slot(row(hour=1), at(2026, 3, 29, 3)))
+        self.assertEqual(at(2026, 10, 25, 0), S.last_slot(row(hour=1), at(2026, 10, 25, 3)))
+
+    def test_midnight_in_a_zone_whose_clocks_change_at_midnight(self):
+        # Havana skips 00:00-01:00 on 8 March 2026: still one slot that day.
+        r = row(hour=0, tz="America/Havana")
+        slots = {S.last_slot(r, at(2026, 3, 6) + m * 600) for m in range(0, 4 * 144)}
+        self.assertEqual(4, len(slots - {S.last_slot(r, at(2026, 3, 6))}))
 
 
 class DataDir(unittest.TestCase):
@@ -175,6 +185,18 @@ class ComposeTests(unittest.TestCase):
         self.assertEqual("Past day: nothing happened", words["title"])
         self.assertEqual("", words["body"])
 
+    def test_failures_are_counted_over_the_whole_window(self):
+        # The entries are capped at 300; the feed's own count is of all of them.
+        words = S.compose({**feed({"change": 400}), "failed": 2, "more": 100}, self.R, self.PREV, self.SLOT)
+        self.assertEqual("Past day: 400 changes, 2 failed", words["title"])
+        unknown = S.compose({**feed({"change": 400}), "more": 100}, self.R, self.PREV, self.SLOT)
+        self.assertEqual("Past day: 400 changes", unknown["title"])
+
+    def test_a_critical_alert_is_an_alert_not_a_failure(self):
+        f = feed({"alert": 1})
+        f["entries"] = [{"at": 1, "kind": "alert", "tone": "bad", "text": "node down"}]
+        self.assertEqual("Past day: 1 alert, nothing failed", S.compose(f, self.R, self.PREV, self.SLOT)["title"])
+
     def test_title_is_bounded(self):
         many = {k: 12345 for k in ("change", "restart", "host", "schedule", "alert", "action")}
         self.assertLessEqual(len(S.compose(feed(many, bad=3), self.R, at(2026, 1, 1, 8), self.SLOT)["title"]), 100)
@@ -262,8 +284,60 @@ class SendTests(DataDir):
         S.step(at(2026, 1, 18, 15, 1), users=self.users)
         self.assertEqual([["alice"]], self.pushed)
         self.assertEqual([("alice", "viewer", self.ARMED)], self.feeds)
+        # The next starts where the late one ended: nothing is counted twice.
         S.step(at(2026, 1, 19, 8), users=self.users)
-        self.assertEqual(at(2026, 1, 18, 8), self.feeds[-1][2])
+        self.assertEqual(at(2026, 1, 18, 15), self.feeds[-1][2])
+
+    def test_each_summary_starts_where_the_last_ended_and_still_reads_past_day(self):
+        self.arm()
+        S.step(at(2026, 1, 15, 8, 0, 40), users=self.users)
+        S.step(at(2026, 1, 16, 8, 0, 20), users=self.users)
+        self.assertEqual(at(2026, 1, 15, 8, 0, 40), self.feeds[-1][2])
+        mine = PUSH.pending("alice", "https://fcm.googleapis.com/fcm/send/alice")["alerts"]
+        self.assertEqual(["Past day: 2 changes, nothing failed"], [a["title"] for a in mine if a["category"] == "summary"])
+
+    def test_two_copies_at_once_send_once(self):
+        self.arm()
+        import threading
+        gate = threading.Barrier(2)
+
+        def slow(user, role, since=None, now=None):
+            gate.wait(5)          # both have built their summary before either claims
+            return feed({"change": 1})
+        with mock.patch.object(S.TIMELINE, "timeline", slow):
+            threads = [threading.Thread(target=S.step, args=(at(2026, 1, 15, 8, 1),), kwargs={"users": self.users})
+                       for _ in range(2)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(10)
+        self.assertEqual([["alice"]], self.pushed)
+
+    def test_saving_the_same_setting_again_keeps_a_due_summary(self):
+        self.arm()
+        self.arm()                       # saved again, unchanged
+        S.save("alice", {"every": "daily", "hour": 8, "tz": "Europe/London"}, at(2026, 1, 15, 8, 0, 10))
+        S.step(at(2026, 1, 15, 8, 1), users=self.users)
+        self.assertEqual([["alice"]], self.pushed)
+
+    def test_nothing_set_reads_no_accounts(self):
+        import homestead_auth as AUTH
+        with mock.patch.object(AUTH, "list_users", mock.Mock(side_effect=AssertionError("read"))):
+            self.assertEqual([], S.step(at(2026, 1, 15, 8)))
+
+    def test_a_removed_account_loses_its_setting(self):
+        self.arm()
+        S.forget_user("alice")
+        self.assertEqual("off", S.view("alice", at(2026, 1, 15, 9))["every"])
+        import homestead_auth_routes as AUTH_ROUTES
+        request = types.SimpleNamespace(user="root", body={"username": "Alice"})
+        with mock.patch.object(AUTH_ROUTES, "connected", lambda r: None), \
+                mock.patch.object(AUTH_ROUTES.AUTH, "delete_user", lambda *a: None), \
+                mock.patch.object(AUTH_ROUTES.AUTH, "list_users", lambda: []), \
+                mock.patch.object(AUTH_ROUTES, "signin", lambda *a, **k: None), \
+                mock.patch.object(AUTH_ROUTES.SUMMARY, "forget_user") as forget:
+            AUTH_ROUTES.remove_user(request)
+        forget.assert_called_once_with("alice")
 
     def test_a_removed_account_is_not_sent_to(self):
         self.arm()
@@ -289,6 +363,12 @@ class PrivateEntriesTests(DataDir):
         self.assertFalse(HOOK._wanted({"category": "summary", "severity": "critical"}, "info"))
         import homestead_timeline as T
         self.assertEqual([], T._alerts(0, 10 ** 10, "admin", []))
+
+    def test_a_person_keeps_one_summary_line_in_the_shared_log(self):
+        for n, user in ((1, "alice"), (2, "bob"), (3, "alice")):
+            ALERTS.note({"key": f"summary:{user}:{n}", "category": "summary", "severity": "info", "event": True,
+                         "title": f"summary {n}", "for": user})
+        self.assertEqual(["summary 2", "summary 3"], [a["title"] for a in ALERTS.log(limit=0 or 50)["alerts"]])
 
 
 if __name__ == "__main__":
