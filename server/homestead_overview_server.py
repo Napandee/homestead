@@ -403,6 +403,10 @@ def outage_tick():
 
         did = OUTAGE.tick(found, UPTIME.report(), restart, lambda item: (item["ns"], item["name"]) in working, operations)
     try:
+        OUTAGE.migrate(found)       # webhook addresses still on an annotation go into their Secret (#931)
+    except Exception as error:
+        print(f"outage actions: move into Secrets: {type(error).__name__}", flush=True)
+    try:
         OUTAGE_CARRY.carry_lan()    # reads its own lists: these cached ones cannot tell a failed VM list from none
     except Exception as error:
         print(f"outage actions: carry-over: {type(error).__name__}", flush=True)
