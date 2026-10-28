@@ -162,11 +162,11 @@ def calls(source, *names):
 def import_aliases(source, module):
     """The names a file binds to a module: `import m` binds "m", `import m as
     x` and `from pkg import m as x` bind "x". Imports anywhere in the file
-    count, inside a function too. Only the module itself: `import m.sub`
-    binds "m" to the package and is not found."""
+    count, inside a function too. A plain `import m.sub` binds the package, not
+    m.sub, so it is not found; `import m.sub as x` binds "x" to it."""
     return {alias.asname or alias.name for node in ast.walk(tree(source))
             if isinstance(node, (ast.Import, ast.ImportFrom)) for alias in node.names
-            if alias.name == module}
+            if alias.name == module and (alias.asname or "." not in alias.name)}
 
 
 def from_imports(source, module):
@@ -190,7 +190,8 @@ def name_counts(source):
     """How often each name appears in a file's code, as a Counter: a Name, an
     attribute (x.NAME), the name a def or class gives, a parameter, a global
     or nonlocal. Not in a comment, a string or a keyword argument. A name a
-    file defines and never uses has a count of 1."""
+    file defines (def, class, assignment) and never uses has a count of 1; an
+    imported name counts only where it is used."""
     found = collections.Counter()
     for node in ast.walk(tree(source)):
         if isinstance(node, ast.Name):

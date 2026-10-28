@@ -217,9 +217,9 @@ def scan(tree, lines=()):
 
 def findings(files=FILES):
     """{"path: import name" / "path: local function.name": "path:line"}.
-    Each file is read through source_scan, but parsed by report() from its
-    text (source_scan.code), not through source_scan's tree cache, so its
-    ~660 trees are freed when the test is done with them."""
+    Each file is read through source_scan, but parsed by report(), not
+    through source_scan's tree cache, so its ~660 trees are freed when the
+    test is done with them (its text stays cached)."""
     return report((path.relative_to(SS.ROOT).as_posix(), path.stem, SS.text(path))
                   for path in files)
 

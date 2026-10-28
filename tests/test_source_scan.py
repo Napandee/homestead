@@ -167,7 +167,7 @@ class Imports(unittest.TestCase):
 
     def test_a_package_or_an_import_in_a_comment_or_a_string_is_not_the_module(self):
         self.assertEqual({"os"}, SS.import_aliases(IMPORTS, "os"))
-        self.assertEqual(set(), SS.import_aliases(IMPORTS, "homestead_x.su"))
+        self.assertEqual(set(), SS.import_aliases(IMPORTS, "homestead_x.sub"))
         self.assertEqual(set(), SS.import_aliases(IMPORTS, "homestead_y"))
 
     def test_the_names_imported_from_a_module_are_found_as_written_there(self):

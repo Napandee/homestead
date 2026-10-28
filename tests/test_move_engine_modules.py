@@ -131,7 +131,8 @@ def _helpers(tree):
 
 
 def replaced(sources, holds):
-    """Each place a test replaces a name on homestead_move_engine other than
+    """sources is {file name: a Path, or source_scan.code(text)}.
+    Each place a test replaces a name on homestead_move_engine other than
     the ones it defines, as "file:line name". Read: what _replacements reads,
     and mock.patch("homestead_move_engine.…") or through a server module that
     imports it (server.MOVE_ENGINE.…); on the engine as a test imported it, as
