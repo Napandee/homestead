@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SERVER = ROOT / "server"
 sys.path.insert(0, str(SERVER))
 
+import source_scan as SS
 import homestead_move_actions as ACT
 import homestead_move_engine as ENGINE
 import homestead_move_phases as PHASE
@@ -142,10 +143,8 @@ def replaced(sources, holds):
     helper from another file, functools.partial, or the module held in a
     local variable inside the helper."""
     found = []
-    trees = {name: ast.parse(text) for name, text in sources.items()}
-    imported = {Path(name).stem: {a.asname or a.name for node in ast.walk(tree) if isinstance(node, ast.Import)
-                                  for a in node.names if a.name == "homestead_move_engine"}
-                for name, tree in trees.items()}
+    trees = {name: SS.tree(source) for name, source in sources.items()}
+    imported = {Path(name).stem: SS.import_aliases(tree, "homestead_move_engine") for name, tree in trees.items()}
     anywhere = set().union(*imported.values(), *holds.values())
     strings = ("homestead_move_engine.",) + tuple(f"{stem}.{alias}." for stem, aliases in holds.items()
                                                   for alias in aliases)
@@ -293,13 +292,13 @@ class MoveEngineModuleTests(unittest.TestCase):
     def test_no_test_replaces_a_moved_name_on_homestead_move_engine(self):
         # A replacement there would not reach the moved code, so it must go to the
         # module that defines the name. What replaced() reads is in its docstring.
-        sources = {path.name: path.read_text() for path in sorted((ROOT / "tests").glob("test_*.py"))}
+        sources = {path.name: path for path in SS.test_files()}
         self.assertEqual([], replaced(sources, engine_holders()))
 
     def test_the_guard_sees_a_helper_that_is_handed_the_engine(self):
         # As test_optional_storage_hosts' reading(module, reader) does with kget:
         # the helper replaces the name, the test only hands it the module.
-        found = replaced({"test_example.py": HELPERS}, {"server": {"MOVE_ENGINE"}})
+        found = replaced({"test_example.py": SS.code(HELPERS)}, {"server": {"MOVE_ENGINE"}})
         self.assertEqual(sorted(["abandon (through reading)", "carry_icon (through naming)",
                                  "tick_all (through passing)", "? (through naming)", "_find", "_retry",
                                  "TICK_SECONDS", "dismiss (through keyword)", "?"]),

@@ -118,8 +118,8 @@ class DeclaredRoutes(unittest.TestCase):
     def test_no_module_reads_forwarding_headers(self):
         """Who sent a request, and over what, is decided once in server.py
         (_client_ip, _over_tls, _via_cloudflare); a module reads request.conn."""
-        for module in sorted((ROOT / "server").glob("homestead_*.py")):
-            text = module.read_text(encoding="utf-8").lower()
+        for module in SS.server_modules():
+            text = SS.text(module).lower()
             for header in ("cf-connecting-ip", "x-forwarded-for", "x-forwarded-proto", "cf-ray"):
                 self.assertNotIn(header, text, f"{module.name} reads {header}: use request.conn")
 
@@ -492,7 +492,7 @@ class ServerStaysRouting(unittest.TestCase):
             for name in re.findall(r"\w+", names):
                 imported[name] = module
         offenders = []
-        for path in sorted((ROOT / "tests").glob("test_*.py")):
+        for path in SS.test_files():
             text = SS.text(path)
             patched = set(re.findall(r'patch\.object\(server, "(\w+)"', text)) | set(re.findall(r"^\s*server\.(\w+) = ", text, re.M))
             offenders += [f"{path.name} patches server.{name}, which server.py imports from {imported[name]}: "
