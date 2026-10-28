@@ -1486,15 +1486,15 @@ const IMAGE_REASONS = {
   unreadable: { tone: "warn", tip: "Kept: a record that says which images are in use couldn't be read" },
 };
 /* Why one image is kept, as the server words it (label and detail), with the
-   page that shows the thing keeping it where there is one. A Job, template,
-   snapshot or import has no page of its own, so it is named, not linked. */
-const IMAGE_KEEPER_PAGES = { Deployment: "workloads", StatefulSet: "workloads", DaemonSet: "workloads", CronJob: "schedules",
-  VirtualMachine: "vms", VirtualMachinePool: "vms", VirtualMachineInstanceReplicaSet: "vms" };
+   page that searches for the thing keeping it where there is one. A Job,
+   scheduled job, pool, template, snapshot or import has no page that finds it
+   by name, so it is named, not linked. */
+const IMAGE_KEEPER_PAGES = { Deployment: "workloads", StatefulSet: "workloads", DaemonSet: "workloads", VirtualMachine: "vms" };
 function imageKeeper(r) {
   const known = IMAGE_REASONS[r.reason] || {};
   const where = `${r.namespace} · ${r.workload} · ${r.container}`;
   const chip = UI.chip(r.label || r.reason, known.tone ?? "ok", { size: "slim", tip: `${where} - ${r.detail || known.tip || ""}` });
-  const page = IMAGE_KEEPER_PAGES[r.kind];
+  const page = r.reason === "unreadable" ? null : IMAGE_KEEPER_PAGES[r.kind];
   const name = page && r.workload
     ? `<button type="button" class="linkish xs" aria-label="Open ${esc(r.workload)}" onclick="imageKeeperOpen(${jsq(page)},${jsq(r.workload)})">${esc(r.workload)}</button>`
     : `<span class="dim xs">${esc(r.workload)}</span>`;

@@ -497,9 +497,8 @@ the answer, adding anything pulled since. **Clean up** removes an image nothing
 uses. A *running* image is what running containers use. An image also stays
 while something not running yet will start from it, and the Retention column
 says which: *Job paused* or *Job waiting*, *scaled to zero* or *no pods yet*
-for an app, *scheduled job*, *stopped VM*, *VM template*, *VM snapshot*, *disk
-import* or *scheduled import*. The app, scheduled job or VM is a link where it
-has a page. *Roll back* copies are the image a container had before its last
+for an app, *scheduled job*, *stopped VM*, *VM pool at zero*, *VM template*, *VM snapshot*, *disk
+import* or *scheduled import*. An app or VM is a link to its page. An import from an OpenShift image stream is\nnot read, so it keeps every image and says *image stream not read*. *Roll back* copies are the image a container had before its last
 update, kept so **Roll back** can return to it; **Forget** one and it becomes
 unused, to clean up like the rest.
 

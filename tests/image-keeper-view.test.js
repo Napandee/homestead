@@ -33,7 +33,7 @@ test("a Job, a template, a snapshot and an import show their own words and are n
 
 test("an app, a scheduled job and a VM link to the page that lists them", () => {
   const { ctx, opened } = load();
-  for (const [kind, page] of [["Deployment", "workloads"], ["DaemonSet", "workloads"], ["CronJob", "schedules"], ["VirtualMachine", "vms"]]) {
+  for (const [kind, page] of [["Deployment", "workloads"], ["DaemonSet", "workloads"], ["VirtualMachine", "vms"]]) {
     const html = ctx.imageKeeper(row(kind, "x", "thing"));
     assert.match(html, new RegExp(`<button type="button" class="linkish xs" aria-label="Open thing" onclick="imageKeeperOpen\\('${page}','thing'\\)"`));
   }
@@ -51,4 +51,10 @@ test("the tooltip carries where it is and the server's sentence", () => {
 test("a server that sends no label still shows the coarse reason", () => {
   const { ctx } = load();
   assert.ok(ctx.imageKeeper({ reason: "rollback", namespace: "lab", workload: "app", container: "app" }).includes("rollback"));
+});
+
+test("what no page finds by name is not linked: scheduled jobs, pools and unreadable records", () => {
+  const { ctx } = load();
+  for (const r of [row("CronJob", "scheduled job", "nightly"), row("VirtualMachinePool", "VM pool at zero", "pool"),
+    row("VirtualMachineInstanceReplicaSet", "x", "set", { reason: "unreadable" })]) assert.doesNotMatch(ctx.imageKeeper(r), /<button/);
 });

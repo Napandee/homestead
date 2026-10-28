@@ -158,7 +158,7 @@ def image_retention_inventory():
     # rollback and active reasons distinct.
     unique = {}
     for row in retained:
-        key = (row["reason"], row["namespace"], row["workload"], row["container"],
+        key = (row["reason"], row.get("kind"), row["namespace"], row["workload"], row["container"],
                row["digest"] or row["ref"])
         unique[key] = row
     return [{**row, **dict(zip(("label", "detail"), WHY[row["why"]]))} for row in unique.values()]

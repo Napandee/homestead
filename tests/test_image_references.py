@@ -799,7 +799,7 @@ class KeptReasonTests(RemovalFixture):
         self.assertTrue(rows)
         for row in rows:
             with self.subTest(row=row):
-                self.assertTrue(row["label"] and row["detail"] and row["kind"])
+                self.assertTrue(row["label"] and row["detail"] and "kind" in row)
 
     def test_an_image_stream_import_is_named_and_still_keeps_every_image(self):
         # OpenShift only: its image stream is not read, so which image it means is unknown.
@@ -819,6 +819,14 @@ class KeptReasonTests(RemovalFixture):
         # No pullMethod node: containerd never holds the image, so nothing is kept.
         dv = {"metadata": {"name": "root", "namespace": "lab"}, "spec": {"source": {"registry": {"imageStream": "fedora"}}}}
         self.assertEqual([], self.why(DVS, dv))
+
+    def test_two_keepers_with_one_name_both_show(self):
+        # A Deployment and a StatefulSet of one name keep the image for the same reason; neither hides the other.
+        web = self.objects["/apis/apps/v1/deployments"]["items"][1]
+        web["status"] = {}
+        sts = json.loads(json.dumps(web))
+        self.assertEqual([("Deployment", "no pods yet"), ("StatefulSet", "no pods yet")],
+                         self.why("/apis/apps/v1/statefulsets", sts))
 
 
 if __name__ == "__main__":
