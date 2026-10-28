@@ -295,6 +295,10 @@ class WriteTests(unittest.TestCase):
             self.assertEqual(names(K.kget(NODES)), [], "a cluster-scoped kind has no namespace to miss")
 
     def test_the_api_server_does_not_delete_a_namespaced_kind_across_all_namespaces(self):
+        with Kube() as kube:
+            with self.assertRaises(urllib.error.HTTPError) as caught:
+                K.ksend("DELETE", "/api/v1/pods")
+            self.assertEqual(caught.exception.code, 405, "an empty store answers the same")
         with Kube(pod("a"), pod("c", ns="other")) as kube:
             with self.assertRaises(urllib.error.HTTPError) as caught:
                 K.ksend("DELETE", "/api/v1/pods")

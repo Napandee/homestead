@@ -45,6 +45,9 @@ MERGE_KEYS = {"containers": "name", "initContainers": "name", "ephemeralContaine
               "ports": ("containerPort", "port")}
 MERGED_PRIMITIVE_LISTS = {"finalizers"}
 LIST_KINDS = {"endpoints": "Endpoints"}
+# Kinds with no namespace: the API server deletes these as a collection without one.
+CLUSTER_SCOPED = {"nodes", "namespaces", "persistentvolumes", "storageclasses", "clusterroles", "clusterrolebindings",
+                  "customresourcedefinitions", "priorityclasses", "volumesnapshotclasses", "ingressclasses", "runtimeclasses"}
 # Resources whose name in the path is not the kind made plural.
 PLURALS = {"endpoints": "endpoints", "networkattachmentdefinition": "network-attachment-definitions",
           "nodemetrics": "nodes", "podmetrics": "pods"}
@@ -271,7 +274,7 @@ class Kube:
     def _delete(self, req, body, ctype, path):
         if req["name"] is None:
             listing = self._list(req)
-            if not req["ns"] and any(row["metadata"].get("namespace") for row in listing["items"]):
+            if not req["ns"] and req["plural"] not in CLUSTER_SCOPED:
                 # The API server has no deletecollection across all namespaces: 405, nothing removed.
                 raise self._error(405, "MethodNotAllowed", f"the server does not allow this method on the requested resource; "
                                   f"{self._what(req)} is namespaced, so name a namespace", path)
