@@ -50,7 +50,7 @@ test("a dialog audit that sets its own jobs also owns them against the jobs poll
   // tick (#892, #934): the entry must set window.__demoOps too, which the demo
   // answers every jobs read from, and each entry starts with it reset.
   const source = read("scripts/audit_dialogs.mjs");
-  const racing = source.split("\n").filter(line => /^\s*\["[^"]+",/.test(line) && line.includes("STATE.data.operations=") && !line.includes("window.__demoOps="))
+  const racing = source.split("\n").filter(line => /^\s*\["[^"]+",/.test(line) && /STATE\.data\.operations\s*=/.test(line) && !/window\.__demoOps\s*=/.test(line))
     .map(line => line.match(/\["([^"]+)"/)[1]);
   assert.deepEqual(racing, [], "write STATE.data.operations=window.__demoOps=[...]");
   assert.match(source, /for \(const \[name, view, \.\.\.steps\] of items\) \{\n\s*await page\.evaluate\(\(\) => \{[^\n]*delete window\.__demoOps;/,
@@ -58,6 +58,6 @@ test("a dialog audit that sets its own jobs also owns them against the jobs poll
 });
 
 test("the whole-dialog screenshot style lives in scripts/audit_ready.mjs only", () => {
-  const copies = checks.filter(file => file !== "scripts/audit_ready.mjs" && /\.modalbox\{max-height:none/.test(read(file)));
+  const copies = checks.filter(file => file !== "scripts/audit_ready.mjs" && /\.modalbox\s*\{\s*max-height\s*:\s*none/.test(read(file)));
   assert.deepEqual(copies, [], "use captureDialog");
 });
