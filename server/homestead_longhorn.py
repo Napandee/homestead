@@ -138,7 +138,7 @@ def overview():
                 by_volume.setdefault(name, []).append(j)
     for v in vols:
         mine = by_volume.get(v["name"], [])
-        v["protected_by"] = [j["name"] for j in mine]
+        v["protected_by"] = None if unread else [j["name"] for j in mine]
         v["snapshotted"] = None if unread else any(j["task"].startswith("snapshot") for j in mine)
         v["backed_up"] = None if unread else any(j["task"].startswith("backup") for j in mine)
     names = VOLUMES.groups(jobs)

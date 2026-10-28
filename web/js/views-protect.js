@@ -326,7 +326,8 @@ function protectBackups(backupVolumes, tgt) {
 const PROTECT_FILTER = { show: "all", group: "", q: "" };
 const PROTECT_SHOWS = [
   ["all", "All", () => true],
-  ["uncovered", "Not covered", v => !(v.protected_by || []).length],
+  // protected_by is null when the jobs could not be read (#927): neither covered nor not.
+  ["uncovered", "Not covered", v => Array.isArray(v.protected_by) && !v.protected_by.length],
   ["protected", "Protected", v => (v.protected_by || []).length > 0],
   ["never", "Never backed up", v => !v.last_backup_at],
   ["unhealthy", "Unhealthy", v => v.robustness !== "healthy"],
@@ -362,7 +363,8 @@ function protectVolumeRow(v) {
     <td class="mono">${v.size_gb} GiB</td>
     <td>${UI.chip(v.robustness || "?", v.robustness === "healthy" ? "ok" : v.robustness === "degraded" ? "warn" : "bad")}</td>
     <td>${v.groups.map(g => UI.chip(g, g === "default" ? "info" : "neutral")).join(" ") || '<span class="dim">—</span>'}</td>
-    <td>${(v.protected_by || []).map(j => UI.chip(j, "ok")).join(" ")
+    <td>${v.protected_by === null ? UI.chip("unknown", "neutral", { tip: "Longhorn's recurring jobs could not be read" })
+      : (v.protected_by || []).map(j => UI.chip(j, "ok")).join(" ")
       || UI.chip("nothing", "warn", { tip: "No snapshot or backup job covers it" })}</td>
     <td class="small dim">${v.last_backup_at ? fmtWhen(v.last_backup_at)
       : (v.protected_by || []).length ? UI.chip("never", "warn", { tip: "A job covers it, but no backup of it has been made yet" }) : "never"}</td>
@@ -434,7 +436,10 @@ function groupCount(name) {
 // refuses to save over a job whose settings were changed, or that was deleted
 // or made, since; the job running moves no generation (#621).
 let LJ_GENERATION = null;
+/* With the jobs unread, a new job or a plan could replace one of the same
+   name unseen (#927): say so instead of opening the dialog. */
 window.lhJob = (j) => {
+  if (STATE.data?.lh?.jobs_unread) return toast("Longhorn's recurring jobs could not be read, so a new job could replace one unseen. Reload to try again.", "warn");
   const d = STATE.data.lh || { groups: ["default"], tasks: {} };
   LJ_GENERATION = !j ? "" : (j.generation ?? null);
   j = j || { name: "", task: "snapshot", cron: "0 2 * * *", retain: 7, concurrency: 1, groups: ["default"] };
@@ -500,6 +505,7 @@ function planList(group, chosen) {
         <div class="plan-jobs">${plan.jobs.map(j => { const name = planJobName(group, j); return UI.chip(`${name} · ${CRON.describe(j.cron)}${j.retain ? ` · keeps ${j.retain}` : ""}`, existing.has(name) ? "warn" : "neutral", { tip: existing.has(name) ? "replaces the job of this name" : "new job" }); }).join(" ")}</div></div></label>`).join("");
 }
 window.lhPlans = (group = "default") => {
+  if (STATE.data?.lh?.jobs_unread) return toast("Longhorn's recurring jobs could not be read, so a plan could replace a job unseen. Reload to try again.", "warn");
   const d = STATE.data.lh || { groups: ["default"], jobs: [] };
   modal("Protection plans", `${UI.lead("A plan makes the jobs a sensible policy needs. They are ordinary jobs afterwards: edit or delete any of them.")}
     <div class="f"><label>Volumes it protects</label><select id="lp_group" onchange="lhPlanGroup()">${(d.groups || ["default"]).map(g =>

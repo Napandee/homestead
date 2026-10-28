@@ -57,6 +57,7 @@ class OverviewTests(unittest.TestCase):
         self.assertIsNone(overview["backed_up"])
         self.assertIsNone(overview["volumes"][0]["backed_up"])
         self.assertIsNone(overview["volumes"][0]["snapshotted"])
+        self.assertIsNone(overview["volumes"][0]["protected_by"], "not known, not covered by nothing")
         # The groups the volumes wear are still listed.
         self.assertEqual(["default", "media"], overview["groups"])
 
