@@ -188,24 +188,30 @@ ${protectBody(d, tgt, load.parts.backups)}`);
 function protectTop(d, objects, tgt, cover) {
   const reading = objects === undefined;
   objects = objects || {};
-  return `${reading || objects.deployed || objects.unread ? "" : objectStoreCard(objects, tgt)}
+  // Jobs that could not be read leave coverage unknown, not 0% (#620, #927).
+  const unread = d.jobs_unread;
+  return `${unread ? UI.callout("warn", "Longhorn's recurring jobs could not be read", `<p>${esc(unread)}</p>
+    <p>Coverage, the recurring jobs and This week's clashes are missing until they are read. Reload to try again.</p>`) : ""}
+  ${reading || objects.deployed || objects.unread ? "" : objectStoreCard(objects, tgt)}
   ${summaryLine("protect", [
-      `${UI.chip(`${cover}% covered`, cover === 100 ? "ok" : cover ? "warn" : "bad")} ${d.protected} of ${d.total} volumes`,
+      unread ? `${UI.chip("coverage unknown", "warn")} ${d.total} volumes`
+        : `${UI.chip(`${cover}% covered`, cover === 100 ? "ok" : cover ? "warn" : "bad")} ${d.protected} of ${d.total} volumes`,
       reading ? `Backup storage <span class="dim small">reading…</span>`
         : objects.deployed ? `Backup storage ${UI.chip(objects.ready ? "serving" : "starting", objects.ready ? "ok" : "warn")}`
         : objects.unread ? `Backup storage ${UI.chip("unknown", "warn", { tip: "Could not read it: " + objects.unread })}` : "",
       tgt.configured ? `Target ${UI.chip(tgt.available ? "reachable" : "unavailable", tgt.available ? "ok" : "bad")}` : UI.chip("no backup target", "warn"),
-      `${d.backed_up ?? 0} backed up off the cluster`],
+      unread ? "" : `${d.backed_up ?? 0} backed up off the cluster`],
     `${objects.deployed ? objectStoreCard(objects, tgt) : ""}
   <div class="grid g3" style="margin-bottom:18px">
     <div class="card flat">
       <div class="ctitle">Coverage</div><div class="csub">Volumes a snapshot or backup job keeps copies of</div>
+      ${unread ? `<div class="ui-help" style="margin-top:12px">Not known: the recurring jobs could not be read.</div>` : `
       <div class="row" style="margin-top:12px;gap:18px;align-items:flex-end">
         <div class="bignum">${cover}<span class="unit">%</span></div>
         <div class="csub" style="padding-bottom:6px">${d.protected} of ${d.total} protected ·
           ${d.backed_up ?? 0} backed up off the cluster</div>
       </div>
-      ${meter(cover, 'style="margin-top:12px"')}
+      ${meter(cover, 'style="margin-top:12px"')}`}
       ${d.unprotected.length ? `<div style="margin-top:12px">
         <button type="button" class="linkish dim xs pf-jump" onclick="protectFilter({show:'uncovered'},true)">NOT COVERED · show all ${d.unprotected.length}</button>
         <div class="pf-chips">${d.unprotected.slice(0, 6).map(name => {
@@ -254,7 +260,8 @@ function protectBody(d, tgt, backupVolumes) {
   <div id="fs-freeze" class="restore-tests"></div>
 
   <div class="sec">Recurring jobs</div>
-  ${d.jobs.length ? `<div class="cardlist">${d.jobs.map(j => `<div class="card flat wcard">
+  ${d.jobs_unread ? `<div class="ui-help">The recurring jobs could not be read, so none are listed. Reload to try again.</div>`
+  : d.jobs.length ? `<div class="cardlist">${d.jobs.map(j => `<div class="card flat wcard">
     <div class="between">
       <div class="row" style="gap:10px;min-width:0">
         <div class="av n3" style="font-size:15px">${TASK_ICON[j.task] || "◷"}</div>

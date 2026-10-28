@@ -186,7 +186,10 @@ CronJobs, power schedules, the host OS update window, and the maintenance
 window when an app updates itself in it - with the clashes first. A job that
 runs more than six times a day is one "runs all day" line. Anything Homestead
 could not read, a schedule included, is named at the top, so a quiet week is
-never one it did not see. To fix a clash, move one of the two jobs here.
+never one it did not see. When Longhorn's recurring jobs cannot be read,
+This week says so instead of "No clashes this week", and Data protection says
+so above its coverage, which it leaves unknown. To fix a clash, move one of
+the two jobs here.
 
 A snapshot or backup job whose last run failed, or backup jobs with no
 backup target (or one that cannot be reached), make the cluster

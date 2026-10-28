@@ -26,3 +26,19 @@ test("no protection plan makes a Longhorn trim job; Housekeeping keeps the snaps
   assert.equal(tidy.jobs.map(j => j.task).join(), "snapshot-cleanup");
   assert.match(tidy.blurb, /Homestead trims every attached volume itself/);
 });
+
+const UNREAD = { total: 1, protected: null, backed_up: null, unprotected: [], groups: ["default"], group_rows: [], clashes: [],
+  target: { configured: true, available: true, url: "s3://backups@example.com/" }, jobs: [],
+  jobs_unread: "Longhorn's recurring jobs could not be read: forbidden",
+  volumes: [{ name: "pvc-1", pvc: "data", namespace: "lab", groups: ["default"], protected_by: [], backed_up: null, snapshotted: null }] };
+
+test("jobs that could not be read are named, coverage is unknown, and no plan is offered on a guess", () => {
+  const ctx = view();
+  const top = ctx.protectTop(UNREAD, { deployed: false, unread: "" }, UNREAD.target, null);
+  assert.match(top, /Longhorn's recurring jobs could not be read: forbidden/);
+  assert.doesNotMatch(top, /% covered/);
+  assert.doesNotMatch(top, /null/);
+  const body = ctx.protectBody(UNREAD, UNREAD.target, []);
+  assert.doesNotMatch(body, /No recurring jobs yet/);
+  assert.match(body, /could not be read/);
+});
