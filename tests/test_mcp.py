@@ -517,6 +517,33 @@ class FilesystemFreezeToolTests(Base):
                 self.assertIn(why, text)
         self.assertEqual(0, REQUESTS.pending_count())
 
+    def test_a_volume_can_be_set_by_its_claim(self):
+        with mock.patch.object(TOOLS, "call", side_effect=self.route):
+            answer = self.call("set_filesystem_freeze", {"volume": "lab/data", "mode": "disabled"}, self.k)["structuredContent"]
+            REQUESTS.approve(answer["request"], "ada", "admin")
+        self.assertEqual(("POST", "/api/longhorn/fs-freeze/volume", {"volume": "pvc-a", "mode": "disabled"}), self.sent[-1])
+
+    def test_a_change_that_changes_nothing_or_has_a_stray_argument_is_refused(self):
+        for args, why in (({"enabled": False}, "already off"), ({"volume": "pvc-a", "mode": "ignored"}, "already set"),
+                          ({"enabled": True, "mode": "enabled"}, "give volume too")):
+            with self.subTest(args=args), mock.patch.object(TOOLS, "call", side_effect=self.route):
+                MCP._calls.clear()
+                self.assertIn(why, self.call("set_filesystem_freeze", args, self.k)["content"][0]["text"])
+
+    def test_approving_reads_the_cluster_afresh(self):
+        with mock.patch.object(TOOLS, "call", side_effect=self.route), mock.patch.object(ROUTER, "forget") as forget:
+            rid = self.call("set_filesystem_freeze", {"enabled": True}, self.k)["structuredContent"]["request"]
+            forget.assert_not_called()
+            REQUESTS.approve(rid, "ada", "admin")
+        forget.assert_called_with("fsfreeze")
+
+    def test_a_kernel_that_became_old_since_the_request_fails_the_approval(self):
+        calm = {**self.STATUS, "old_kernels": []}
+        with mock.patch.object(TOOLS, "call", return_value=calm):
+            rid = self.call("set_filesystem_freeze", {"enabled": True}, self.k)["structuredContent"]["request"]
+        with mock.patch.object(TOOLS, "call", side_effect=self.route):
+            self.assertEqual("failed", REQUESTS.approve(rid, "ada", "admin")["status"])
+
     def test_longhorn_without_the_setting_is_refused_with_its_words(self):
         old = {"supported": False, "version": "v1.6.2", "volumes": [], "why": "Longhorn v1.6.2 cannot freeze filesystems for snapshots: Longhorn 1.7 added it."}
         with mock.patch.object(TOOLS, "call", return_value=old):
@@ -534,7 +561,7 @@ class FilesystemFreezeToolTests(Base):
         out = []
         with mock.patch.object(TOOLS, "call", side_effect=self.route), \
                 mock.patch.object(AUDIT_LOG, "emit", side_effect=lambda entry, keep=True: out.append(entry)):
-            self.ask(rpc("tools/call", {"name": "set_filesystem_freeze", "arguments": {"enabled": False}}), self.k)
+            self.ask(rpc("tools/call", {"name": "set_filesystem_freeze", "arguments": {"enabled": True}}), self.k)
             conn = ROUTER.Connection(ROUTER.Headers([]), {}, False, False, None, None, self.k, None)
             AUDIT_LOG.record(ROUTER.Request("POST", "/mcp", None, {}, "api-key:claude", "operator", "192.0.2.40", conn), 200, 4,
                              notes=ROUTER._take_notes())

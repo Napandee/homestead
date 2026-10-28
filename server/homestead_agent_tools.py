@@ -524,6 +524,8 @@ def _plan_filesystem_freeze(args, ctx):
     volume, mode, enabled = args.get("volume"), args.get("mode"), args.get("enabled")
     if volume and enabled is not None:
         raise ToolError("give enabled for the cluster setting, or volume and mode for one volume, not both")
+    if ctx.get("fresh"):    # approving: read the cluster now, not the page's 30-second answer
+        ROUTER.forget("fsfreeze")
     status = call("GET", "/api/longhorn/fs-freeze", **_as(ctx))
     if not status.get("supported"):
         raise ToolError(status.get("why") or "this Longhorn cannot freeze filesystems for snapshots")
@@ -531,7 +533,8 @@ def _plan_filesystem_freeze(args, ctx):
     warning = ("Kernel 5.17 or older on " + ", ".join(old) + ": if a volume fails mid-freeze, its filesystem can stay stuck "
                "until that host restarts.") if old else ""
     if volume:
-        volume = _name(volume, "volume")
+        if not isinstance(volume, str):
+            raise ToolError("volume must be a Longhorn volume name or its claim")
         if mode not in ("ignored", "enabled", "disabled"):
             raise ToolError("mode must be ignored (follow the cluster), enabled (always freeze) or disabled (never freeze)")
         row = next((v for v in status.get("volumes") or [] if volume in (v.get("name"), v.get("claim"))), None)
@@ -539,6 +542,8 @@ def _plan_filesystem_freeze(args, ctx):
             raise ToolError(f"there is no Longhorn volume {volume}; list_volumes names them")
         if mode == "enabled" and row.get("engine") == "v2":
             raise ToolError(f"{volume} is a V2 volume: Longhorn never freezes these")
+        if row.get("mode") == mode:
+            raise ToolError(f"{volume} is already set to {mode}")
         said = {"ignored": "follow the cluster setting", "enabled": "always freeze", "disabled": "never freeze"}[mode]
         summary = {"action": f"Set {row.get('claim') or row['name']} to {said} for snapshots", "target": row["name"]}
         if mode == "enabled" and warning:
@@ -548,10 +553,16 @@ def _plan_filesystem_freeze(args, ctx):
         raise ToolError("give enabled (true or false) for the cluster setting, or volume and mode for one volume")
     if not isinstance(enabled, bool):
         raise ToolError("enabled must be true or false")
+    if mode is not None:
+        raise ToolError("mode is for one volume: give volume too, or enabled alone for the cluster")
+    if bool(status.get("enabled")) == enabled and not status.get("unknown_value"):
+        raise ToolError(f"the cluster setting is already {'on' if enabled else 'off'}")
     summary = {"action": "Turn on freezing filesystems for snapshots" if enabled else "Turn off freezing filesystems for snapshots",
                "target": "every volume that follows the cluster setting"}
     if enabled and warning:
         summary["warning"] = warning
+    if status.get("from_chart"):
+        summary["note"] = "Longhorn's chart sets this too: applying the chart again puts its value back."
     return summary, {"enabled": enabled}
 
 
