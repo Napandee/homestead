@@ -3414,7 +3414,7 @@ ssh_pwauth: true
   // The setup guide, part way through, as a cluster a few weeks in would be.
   const demoSetup = { skips: [], hidden: false, opened: true, admin: true, personal: ["appearance", "phone", "notifications"], steps: {
     health: { done: false, applies: true, summary: "One workload is not ready",
-      issues: [{ severity: "degraded", kind: "Workload", name: "lab/doublecommander", reason: "only 0/1 replicas ready after 12m" }] },
+      issues: [{ severity: "degraded", kind: "Workload", name: "lab/doublecommander", reason: "only 0/1 replicas ready, not ready for 12m" }] },
     placement: { done: false, applies: true, mode: "", unreserved: 4, notes: [], hosts: [{ name: "harvester-node1", standby: false, tainted: false, takes_work: true }, { name: "harvester-node2", standby: false, tainted: false, takes_work: true }, { name: "harvester-node3", standby: false, tainted: false, takes_work: true }] },
     quorum: { done: true, applies: true, servers: 3, members: ["harvester-node1", "harvester-node2", "harvester-node3"],
       ready: ["harvester-node1", "harvester-node2", "harvester-node3"], can_lose: 1, nodes: [], tiebreakers: [] },

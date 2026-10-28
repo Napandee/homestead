@@ -369,7 +369,10 @@ def get_workloads(pods=None):
                         why = UPDATES.explain_pull(waiting.get("message"))
                         fatal_waits.append(f"{p['metadata']['name']}: {reason}" + (f" - {why}" if why else ""))
             if not ready:
-                transition_ages.append(age_secs(p["metadata"].get("creationTimestamp")))
+                # Not ready since its Ready condition last changed: a restart
+                # in a days-old pod is seconds old, not days (#941).
+                transition_ages.append(age_secs(conditions.get("Ready", {}).get("lastTransitionTime")
+                                                or p["metadata"].get("creationTimestamp")))
             # Pending and unscheduled says nothing; the scheduler said why.
             unplaced = ""
             placed = conditions.get("PodScheduled") or {}

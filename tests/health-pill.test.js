@@ -51,6 +51,14 @@ test("starting and updating stay neutral but pulse, so they do not read as not l
   }
 });
 
+test("repairing and maintenance are activities too: neutral, pulsing (#941)", () => {
+  for (const state of ["repairing", "maintenance"]) {
+    const pill = painted({ state, summary: "Volume data: rebuilding a copy, 40% done", age_s: 3 });
+    assert.deepEqual(classes(pill), ["busy", "neutral", "ui-chip"]);
+    assert.equal(pill.textContent, state.toUpperCase());
+  }
+});
+
 test("the tooltip says how many seconds ago within the minute", () => {
   assert.equal(painted({ state: "healthy", summary: "Fine", age_s: 20 }).title, "Fine · checked 20s ago");
 });

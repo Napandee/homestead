@@ -62,8 +62,9 @@ function dashboardAlert(items) {
 
 /* The sidebar's health pill, on every page (#940). The Dashboard paints it
    from its overview; every page from each /api/alerts read (pwa.js), which
-   carries the same verdict. Colour is the verdict; starting and updating are
-   not faults, so they stay neutral with a pulsing dot. Dashed is "not there
+   carries the same verdict. Colour is the verdict; starting, updating,
+   repairing (a volume rebuilding a copy) and maintenance (a host Homestead is
+   working on) are not faults (#941), so they stay neutral with a pulsing dot. Dashed is "not there
    yet": CHECKING before the first answer, UNKNOWN when there is no verdict
    (null, or the server's "unknown"), and the last verdict once it is a
    minute old. h undefined (a server without the field) leaves the pill be. */
@@ -73,7 +74,7 @@ function paintHealthPill(h) {
   const state = h?.state ? String(h.state).toLowerCase() : "unknown";
   const unread = state === "unknown";
   const tone = { healthy: "ok", degraded: "warn", critical: "bad" }[state] || "neutral";
-  const busy = state === "starting" || state === "updating";
+  const busy = ["starting", "updating", "repairing", "maintenance"].includes(state);
   const age = unread || typeof h.age_s !== "number" ? null : h.age_s;
   const extra = unread ? " pending" : busy ? " busy" : "";
   pill.className = `ui-chip ${tone}${extra}${age !== null && age >= 60 ? " stale" : ""}`;

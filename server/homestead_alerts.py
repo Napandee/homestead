@@ -259,7 +259,10 @@ def health_facts(overview):
     # One condition per resource, with every finding retained. The old loop
     # emitted duplicate disk keys, allowing the last finding to hide severity.
     grouped = {}
-    for issue in overview.get("health_issues") or []:
+    # This cycle's issues, not the verdict's held ones (#941): alerts hold
+    # them themselves, and holding twice would raise them after two holds.
+    current = overview.get("current_issues")
+    for issue in (overview.get("health_issues") if current is None else current) or []:
         kind, name = issue.get("kind", ""), issue.get("name", "")
         key = f"health:{kind}:{name}"
         row = grouped.setdefault(key, {"kind": kind, "name": name, "issues": []})
