@@ -1022,8 +1022,9 @@ def run_jobs(is_leader, stop=None, beat=None):
         # Cleared after the pause: asks that came during it are answered by
         # the round about to start, not by another one straight after it.
         _wake.clear()
-    # A stop waits for the steps in flight, as it waited for its round (#933).
-    STEPS.wait()
+    # A stop waits for the steps in flight, as it waited for its round (#933),
+    # but not for ever on one that hung: its job's lock still keeps it its own.
+    STEPS.wait(STEPS.OVERDUE_SECONDS)
 
 
 # A lock file per job that ran outside the store's lock (_job_lock) stays on the
@@ -1201,15 +1202,24 @@ def list_operations(wait=True):
     except STORAGE_JOURNAL.Held:
         return snapshot()  # inspection stays available without advancing old jobs
     pending = {item["id"]: item for item in _read() if _steppable(item)}
+    mine = []   # the steps this call started (wait: their errors are its own)
 
-    def start_steps():
-        for job_id in STEPS.fair(list(pending)):
+    def start_steps(prune):
+        reserved = set()   # what the jobs waiting this round claim: no later job overtakes them
+        for job_id in STEPS.fair(list(pending), prune=prune):
             item = pending[job_id]
-            started = STEPS.submit(job_id, step_claims(item), lambda job_id=job_id: _resolve_outside(job_id),
-                                   label=item.get("title") or item.get("kind"))
-            if started != "waiting" or not wait:
+            claims = step_claims(item)
+            step = lambda job_id=job_id: _resolve_outside(job_id)
+            started = STEPS.submit(job_id, claims, step, label=item.get("title") or item.get("kind"),
+                                   reserved=reserved)
+            if started == "started":
+                mine.append(step)
+            elif started == "waiting":
+                reserved |= claims
+            # With wait, a job still in flight from the loop gets its own step after.
+            if started == "started" or not wait:
                 pending.pop(job_id)
-    start_steps()
+    start_steps(prune=True)
     with _lock:
         items = _read()
         changed = False
@@ -1224,9 +1234,9 @@ def list_operations(wait=True):
         return listed
     while pending:
         STEPS.wait_change()
-        start_steps()
+        start_steps(prune=False)
     STEPS.wait()
-    failed = STEPS.take_errors()
+    failed = STEPS.take_errors(mine)
     if failed:
         raise failed[0][2]
     return snapshot()

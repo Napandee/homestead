@@ -71,8 +71,9 @@ class JobStepsTests(unittest.TestCase):
         self.gate = Gate()
         for kind in ("host-os", "host-bond", "host-bridge", "workload-copy", "weekly-trim"):
             OPS.RESOLVERS[kind] = self.gate
-        # Never leave a step of this test running into the next one.
-        self.addCleanup(lambda: STEPS.wait(10))
+        # Never leave a step, an error or a turn of this test to the next one.
+        self.addCleanup(lambda: (STEPS._errors.clear(), STEPS._last.clear()))
+        self.addCleanup(lambda: self.assertTrue(STEPS.wait(10), "a step of this test never ended"))
         self.addCleanup(self.gate.released.set)
         self.beats = []
 
@@ -150,6 +151,22 @@ class JobStepsTests(unittest.TestCase):
         self.assertTrue(until(lambda: (self.tick(), self.gate.count(move))[1] >= 1))
         self.assertEqual([], self.gate.overlaps)
 
+    def test_a_job_waiting_on_a_clash_is_not_overtaken_by_a_later_one(self):
+        """The trim claims every volume: two data moves taking turns must not
+        keep it out for ever."""
+        first = self.copy_job("app-a", ["data-a"])
+        self.gate.held.add(first)
+        self.tick()
+        self.assertTrue(until(lambda: self.gate.count(first) == 1))
+        trim, second = self.trim_job(), self.copy_job("app-b", ["data-b"])
+        self.tick()
+        time.sleep(0.2)
+        self.assertEqual(0, self.gate.count(second), "a later move overtook the trim waiting for the first")
+        self.gate.released.set()
+        STEPS.wait(5)
+        self.tick()
+        self.assertTrue(until(lambda: self.gate.count(trim) == 1), "the trim never stepped")
+
     def test_jobs_on_different_hosts_and_objects_step_side_by_side(self):
         jobs = [self.host_job("node-1"), self.copy_job("app-a", ["data"])]
         self.gate.held.update(jobs)
@@ -190,6 +207,51 @@ class JobStepsTests(unittest.TestCase):
         loop.join(5)
         self.assertFalse(loop.is_alive())
         self.assertEqual("Step 1", self.message(op), "the step's result was lost at the stop")
+
+    def test_a_stop_is_not_held_for_ever_by_a_hung_step(self):
+        self.enterContext(mock.patch.object(STEPS, "OVERDUE_SECONDS", 0.3))
+        op = self.host_job("node-1")
+        self.gate.held.add(op)
+        stop = threading.Event()
+        loop = threading.Thread(target=OPS.run_jobs, args=(lambda: True, stop), daemon=True)
+        loop.start()
+        self.assertTrue(until(lambda: self.gate.count(op) == 1))
+        stop.set(); OPS.advance_soon()
+        loop.join(3)
+        self.assertFalse(loop.is_alive(), "a hung step held the stop for ever")
+
+    def test_a_step_that_cannot_start_leaves_its_job_free(self):
+        op = self.host_job("node-1")
+        with mock.patch.object(STEPS.threading.Thread, "start", side_effect=RuntimeError("can't start new thread")):
+            with self.assertRaises(RuntimeError):
+                STEPS.submit(op, {("host", "node-1")}, lambda: None)
+        self.assertNotIn(op, STEPS.in_flight())
+
+    def test_a_direct_round_gives_a_job_in_flight_its_own_step(self):
+        op = self.host_job("node-1")
+        self.gate.held.add(op)
+        self.tick()
+        self.assertTrue(until(lambda: self.gate.count(op) == 1))
+        threading.Timer(0.3, self.gate.released.set).start()
+        OPS.list_operations()
+        self.assertEqual(2, self.gate.count(op), "the direct round counted the loop's step as its own")
+
+    def test_a_direct_round_raises_its_own_steps_error_not_the_loops(self):
+        loops, mine = self.host_job("node-1"), self.host_job("node-2")
+        boom = {loops: RuntimeError("loop's step"), mine: RuntimeError("my step")}
+        real = OPS._resolve_outside
+
+        def resolve(job_id):
+            if job_id in boom:
+                raise boom.pop(job_id)
+            return real(job_id)
+        with mock.patch.object(OPS, "_resolve_outside", resolve), mock.patch("builtins.print"):
+            STEPS.submit(loops, {("host", "node-1")}, lambda: resolve(loops))
+            STEPS.wait(5)
+            with self.assertRaisesRegex(RuntimeError, "my step"):
+                OPS.list_operations()
+            OPS.tick(lambda: True, self.beat)
+        self.assertEqual("loop's step", str(self.beats[-1]), "the loop's error was lost")
 
     def test_a_standby_replica_starts_no_step_and_a_step_in_flight_still_saves(self):
         op = self.host_job("node-1")

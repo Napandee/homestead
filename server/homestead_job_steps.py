@@ -18,8 +18,11 @@ thread, and the loop goes on with its rounds:
   claims, and the loop's heartbeat names it. Python cannot stop a thread:
   the step's own timeouts (Kubernetes calls, host runs) are what end it. At
   most WORKERS such hung steps are carried, so threads stay bounded;
+- a job waiting on a clash reserves its claims for the rest of the round, so
+  later jobs that meet them (two data moves taking turns, say) never keep a
+  job that claims more (the weekly trim) out for ever;
 - wait() waits for the steps in flight: the loop's stop waits for them, as
-  it waited for its round before.
+  it waited for its round before, for up to OVERDUE_SECONDS.
 
 Across replicas, each job's own lock file (homestead_operations._job_lock)
 still keeps a new leader from running a step an old leader has in flight.
@@ -35,7 +38,7 @@ OVERDUE_SECONDS = 300
 _cond = threading.Condition()
 _running = {}    # job id -> {"claims", "label", "began"}
 _last = {}       # job id -> when its last step began (monotonic), for fairness
-_errors = []     # (job id, label, error) of steps that raised, until taken
+_errors = []     # (job id, label, error, step) of steps that raised, until taken
 
 
 def overlap(a, b):
@@ -44,9 +47,9 @@ def overlap(a, b):
     for a job that says nothing about what it touches."""
     for x in a:
         for y in b:
-            if x == ("all",) or y == ("all",):
+            if x[:1] == ("all",) or y[:1] == ("all",):
                 return True
-            if x[0] == y[0] and (x[1:] == y[1:] or "*" in (x[1], y[1])):
+            if x[:1] == y[:1] and (x[1:] == y[1:] or "*" in x[1:2] + y[1:2]):
                 return True
     return False
 
@@ -55,41 +58,48 @@ def _counted(now):
     return sum(1 for row in _running.values() if now - row["began"] < OVERDUE_SECONDS)
 
 
-def submit(job_id, claims, step, label=""):
+def submit(job_id, claims, step, label="", reserved=()):
     """Run step() on a thread of its own if there is room: "started"; the
     job's step is still in flight: "running"; no room yet (the pool is full,
-    or another job in flight claims the same thing): "waiting"."""
+    or another job in flight claims the same thing): "waiting". reserved:
+    the claims of jobs earlier in this round that are waiting; a later job
+    whose claims meet them waits too, so it never overtakes them for ever."""
     with _cond:
         if job_id in _running:
             return "running"
         now = time.monotonic()
-        if (_counted(now) >= WORKERS or len(_running) >= 2 * WORKERS or
+        if (_counted(now) >= WORKERS or len(_running) >= 2 * WORKERS or overlap(claims, reserved) or
                 any(overlap(claims, row["claims"]) for row in _running.values())):
             return "waiting"
         _running[job_id] = {"claims": set(claims), "label": label or job_id, "began": now}
         _last[job_id] = now
-        thread = threading.Thread(target=_run, args=(job_id, step), name=f"job-step-{job_id}"[:40], daemon=True)
-    thread.start()
+        try:
+            threading.Thread(target=_run, args=(job_id, step), name=f"job-step-{job_id}"[:40], daemon=True).start()
+        except BaseException:
+            _running.pop(job_id, None)  # never started: the job is free for a later round
+            raise
     return "started"
 
 
 def _run(job_id, step):
     try:
         step()
-    except Exception as error:
+    except BaseException as error:
         with _cond:
-            _errors.append((job_id, _running[job_id]["label"], error))
+            _errors.append((job_id, _running[job_id]["label"], error, step))
     finally:
         with _cond:
             _running.pop(job_id, None)
             _cond.notify_all()
 
 
-def fair(ids):
-    """ids, the one whose last step began longest ago (or never) first."""
+def fair(ids, prune=True):
+    """ids, the one whose last step began longest ago (or never) first.
+    prune: forget the turns of jobs not in ids (pass the round's every job)."""
     with _cond:
-        for gone in set(_last) - set(ids) - set(_running):
-            del _last[gone]
+        if prune:
+            for gone in set(_last) - set(ids) - set(_running):
+                del _last[gone]
         return sorted(ids, key=lambda job_id: _last.get(job_id, float("-inf")))
 
 
@@ -111,17 +121,19 @@ def wait(timeout=None):
         return _cond.wait_for(lambda: not _running, timeout)
 
 
-def take_errors():
-    """The steps that raised since last asked: [(job id, label, error)]."""
-    with _cond:
-        taken = list(_errors)
-        _errors.clear()
-        return taken
-
-
 def overdue():
     """The steps in flight for longer than OVERDUE_SECONDS: [(label, seconds)]."""
     now = time.monotonic()
     with _cond:
         return [(row["label"], int(now - row["began"])) for row in _running.values()
                 if now - row["began"] >= OVERDUE_SECONDS]
+
+
+def take_errors(steps=None):
+    """The steps that raised since last asked - of the steps given (the
+    callables passed to submit), or every one when None: [(job id, label,
+    error)]. The rest stay to be taken."""
+    with _cond:
+        taken = [row for row in _errors if steps is None or any(row[3] is step for step in steps)]
+        _errors[:] = [row for row in _errors if not any(row is t for t in taken)]
+        return [row[:3] for row in taken]
