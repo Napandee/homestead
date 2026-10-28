@@ -17,9 +17,10 @@ const PROTECT_PLANS = [
     jobs: [{ name: "daily-snapshot", task: "snapshot", cron: "0 2 * * *", retain: 7, concurrency: 2 },
       { name: "daily-backup", task: "backup", cron: "30 2 * * *", retain: 14, concurrency: 1 },
       { name: "weekly-backup", task: "backup", cron: "0 3 * * 0", retain: 8, concurrency: 1 }] },
-  { id: "tidy", title: "Housekeeping", blurb: "A weekly trim, so space an app has freed is given back to the disks, and a weekly purge of the system snapshots Longhorn takes during rebuilds.",
-    jobs: [{ name: "weekly-trim", task: "filesystem-trim", cron: "0 4 * * 6", retain: 0, concurrency: 1 },
-      { name: "weekly-cleanup", task: "snapshot-cleanup", cron: "30 4 * * 6", retain: 0, concurrency: 1 }] },
+  // No trim job (#927): Longhorn's tries every volume in its groups and fails on
+  // detached ones and VM disks, and one in default switches Homestead's own off.
+  { id: "tidy", title: "Housekeeping", blurb: "A weekly purge of the system snapshots Longhorn takes during rebuilds. Space an app has freed is given back by the weekly trim under Housekeeping on this page: Homestead trims every attached volume itself.",
+    jobs: [{ name: "weekly-cleanup", task: "snapshot-cleanup", cron: "30 4 * * 6", retain: 0, concurrency: 1 }] },
 ];
 
 /* where: what says why a run failed - Longhorn's own jobs by default. */
@@ -521,7 +522,7 @@ window.lhPlanApply = async () => {
   const group = $("#lp_group").value || "default";
   try {
     await planApply(plan, group);
-    toast(`${plan.title}: ${plan.jobs.length} jobs set up for ${group}`, "ok"); closeModal(); resetPaint(); viewProtect();
+    toast(`${plan.title}: ${plan.jobs.length} job${plan.jobs.length === 1 ? "" : "s"} set up for ${group}`, "ok"); closeModal(); resetPaint(); viewProtect();
   } catch (e) { toast(e.message, "bad"); }
 };
 
@@ -1051,7 +1052,7 @@ function weeklyTrimCard(d) {
         <div class="csub">Every attached volume, Saturdays at 04:00 UTC${d.enabled && d.next ? ` · next ${esc(fmtAt(d.next))}` : ""}</div></div>
         <div class="row" style="gap:8px">${status}${d.running ? "" : '<button class="btn sm" data-need="operator" onclick="weeklyTrimRun()">Run now</button>'}</div></div>
       <div style="margin-top:10px">${lines}</div>
-      ${d.theirs ? `<div class="dim xs wt-line">Your trim job <span class="mono">${esc(d.theirs)}</span> already trims the default group, so this one does not run as well.</div>` : ""}
+      ${d.theirs ? `<div class="dim xs wt-line">Your trim job <span class="mono">${esc(d.theirs)}</span> already trims the default group, so this one does not run as well. Delete it under Recurring jobs to let Homestead trim attached volumes instead: Longhorn's fails on detached volumes and VM disks.</div>` : ""}
       <div class="between wt-foot"><label class="switch" data-need="admin"><input type="checkbox" id="wt_on" ${d.enabled ? "checked" : ""} onchange="weeklyTrimSwitch(this.checked)"> Trim weekly</label>
         <div class="dim xs" id="wt_off"${d.enabled ? " hidden" : ""}>Off · Run now still trims every attached volume</div></div>
       ${UI.guide("How the weekly trim works", "<p>Files deleted inside a volume keep their space in Longhorn until the filesystem is trimmed. Each week Homestead trims every attached volume, one at a time. A detached volume cannot be trimmed, and a VM disk has no filesystem Longhorn can trim, so both are skipped and named. A volume that fails is named with Longhorn's answer.</p>")}
