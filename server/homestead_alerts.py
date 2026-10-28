@@ -16,6 +16,9 @@ HOLD = 60
 LOG_SIZE = 300
 _lock = SHARED.SharedLock("alerts")
 SEVERITY = {"info": 0, "degraded": 1, "critical": 2}
+# Log lines meant for one device (a test) or one person (their summary, #921):
+# never in the shared list, the Timeline or the alert webhook.
+PRIVATE = ("test", "summary")
 
 
 def bind(data_dir):
@@ -222,6 +225,8 @@ def note(fact, now=None):
         entry = _append(state, fact, "raised", now or time.time())
         if fact.get("to"):
             entry["to"] = fact["to"]
+        if fact.get("for"):
+            entry["for"] = fact["for"]
         _save(state)
         return entry
 
@@ -404,6 +409,6 @@ def _unknown(read, *args):
 ROUTES = {
     ("GET", "/api/alerts"): ("viewer", lambda request: {
         "active": [a for a in active(user=request.user) if a.get("announced", 0) > 0],
-        "log": [a for a in log(limit=30)["alerts"] if a["category"] != "test"],
+        "log": [a for a in log(limit=30)["alerts"] if a["category"] not in PRIVATE],
         "devices": _unknown(DEVICES[0], request.user), "agents": _unknown(AGENTS[0])}),
 }

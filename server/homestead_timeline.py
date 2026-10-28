@@ -190,7 +190,7 @@ def _alerts(since, now, role, unread):
     SHARED.read_json(os.path.join(ALERTS.DATA_DIR, "alerts.json"), {})
     out = []
     for a in ALERTS.log(limit=ALERTS.LOG_SIZE)["alerts"]:
-        if a.get("category") == "test" or not isinstance(a.get("at"), (int, float)) or a["at"] <= since:
+        if a.get("category") in ALERTS.PRIVATE or not isinstance(a.get("at"), (int, float)) or a["at"] <= since:
             continue
         tone = "ok" if a.get("phase") == "resolved" else ALERT_TONES.get(a.get("severity"), "info")
         href = str(a.get("href") or "")
