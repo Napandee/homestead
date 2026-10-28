@@ -171,6 +171,7 @@ MODULES = (
     "homestead_start_order",
     "homestead_storage",
     "homestead_storage_classes",
+    "homestead_storage_leftovers",
     "homestead_storage_server",
     "homestead_timeline",
     "homestead_timeline_summary",
