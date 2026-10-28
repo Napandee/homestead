@@ -1,8 +1,8 @@
 /* Schedules › This week: everything Homestead knows is scheduled in the next
    seven days, as one list grouped by day in the reader's time zone.
 
-   It reads what the pages already read: Longhorn's recurring jobs and the
-   clashes the server found between them (/api/lh/overview,
+   It reads what the pages already read: Longhorn's recurring jobs, Homestead's
+   own weekly trim, and the clashes the server found between them (/api/lh/overview,
    homestead_schedule_clashes), CronJobs (/api/schedules), power schedules
    (/api/power-schedules), the host OS update window (/api/os-updates) and the
    maintenance window apps update in (/api/settings, with /api/workloads for
@@ -131,6 +131,9 @@
     const apps = lazy("workloads", Array.isArray), copies = lazy("copies", Array.isArray);
     let clashes = [], restarts = true;
     const backups = [], stops = [], windows = [], volumeOf = new Map();
+    // Homestead's own jobs on the volumes (its weekly trim, #927) are named
+    // as Homestead's; a clash's job is Longhorn's unless it is one of them.
+    const ours = new Set();
     read("lh", lhRead, lh => {
       clashes = Array.isArray(lh.clashes) ? lh.clashes : [];
       (lh.volumes || []).forEach(v => volumeOf.set(`${v.namespace}/${v.pvc}`, v.name));
@@ -138,7 +141,12 @@
         const times = addCron({ kind: "Longhorn", name: j.name, what: TASK_WORDS[j.task] || j.task || "job" }, j.cron, "");
         if (String(j.task || "").startsWith("backup")) backups.push({ name: j.name, volumes: new Set(j.volumes || []), times, length: runLength(j) });
       });
+      (Array.isArray(lh.homestead_jobs) ? lh.homestead_jobs : []).forEach(j => {
+        ours.add(j.name);
+        addCron({ kind: "Homestead", name: j.name, what: TASK_WORDS[j.task] || j.task || "job" }, j.cron, "");
+      });
     });
+    const jobKind = name => ours.has(name) ? "Homestead" : "Longhorn";
     read("crons", Array.isArray, crons => crons.filter(c => !c.suspend)
       .forEach(c => addCron({ kind: "CronJob", name: c.name, what: c.namespace ? `job in ${c.namespace}` : "job" }, c.schedule, c.time_zone || "")));
     read("power", v => answered(v) && Array.isArray(v.items), power => power.items.forEach(p => {
@@ -186,11 +194,11 @@
     const marks = new Map(), mark = (key, severity) => { if (marks.get(key) !== "clash") marks.set(key, severity); };
     // Keys: kind, namespace and name at the second; a power start is never marked.
     const key = (kind, name, at, ns = "") => `${kind}:${ns}/${name}@${at}`;
-    for (const c of clashes) for (const pair of c.times || []) pair.forEach((t, i) => mark(key("Longhorn", c.jobs?.[i]?.name, t), c.severity));
+    for (const c of clashes) for (const pair of c.times || []) pair.forEach((t, i) => mark(key(jobKind(c.jobs?.[i]?.name), c.jobs?.[i]?.name, t), c.severity));
     for (const o of overlaps) { mark(key("Longhorn", o.backup, o.started.getTime() / 1000), "close"); mark(key(o.kind, o.other, o.at.getTime() / 1000, o.ns), "close"); }
     for (const item of items) if (item.kind !== "Power" || item.what === "stops") item.clash = marks.get(key(item.kind, item.name, item.at.getTime() / 1000, item.ns)) || "";
     // A collapsed job has no single run to mark: it carries its worst pair.
-    for (const f of frequent) if (f.kind === "Longhorn") {
+    for (const f of frequent) if (f.kind === "Longhorn" || f.kind === "Homestead") {
       const named = clashes.filter(c => (c.jobs || []).some(j => j.name === f.name));
       f.clash = named.some(c => c.severity === "clash") ? "clash" : named.length || overlaps.some(o => o.backup === f.name) ? "close" : "";
     }

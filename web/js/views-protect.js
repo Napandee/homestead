@@ -1050,7 +1050,17 @@ function trimSummary(last) {
   return `Trimmed ${trimPlural((last.trimmed || []).length, "volume")}, skipped ${(last.skipped || []).length}${said ? ` (${said})` : ""}`;
 }
 
+/* The trim's slot (#927): weekday, Monday 0, and hour, both UTC; Saturday
+   04:00 when the answer has none (homestead_weekly_trim.slot_of). */
+const TRIM_DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+const trimHour = h => `${String(h).padStart(2, "0")}:00`;
+function trimSlot(d) {
+  const whole = (v, top) => Number.isInteger(v) && v >= 0 && v <= top;
+  return whole(d?.weekday, 6) && whole(d?.hour, 23) ? { weekday: d.weekday, hour: d.hour } : { weekday: 5, hour: 4 };
+}
+
 function weeklyTrimCard(d) {
+  const slot = trimSlot(d);
   const last = d.last, failed = last?.failed || [], unconfirmed = last?.unconfirmed || [], skipped = last?.skipped || [];
   const status = d.running ? UI.chip("trimming now", "info") : !last ? UI.chip("not run yet", "neutral")
     : failed.length ? UI.chip("failed", "bad") : UI.chip("trimmed", "ok");
@@ -1062,8 +1072,8 @@ function weeklyTrimCard(d) {
   return `<div id="housekeeping" class="housekeeping">${UI.section("Housekeeping", `
     <div class="card flat">
       <div class="between wt-head"><div><div class="ctitle">Weekly trim</div>
-        <div class="csub">Every attached volume, Saturdays at 04:00 UTC${d.enabled && d.next ? ` · next ${esc(fmtAt(d.next))}` : ""}</div></div>
-        <div class="row" style="gap:8px">${status}${d.running ? "" : '<button class="btn sm" data-need="operator" onclick="weeklyTrimRun()">Run now</button>'}</div></div>
+        <div class="csub">Every attached volume, ${TRIM_DAYS[slot.weekday]}s at ${trimHour(slot.hour)} UTC${d.enabled && d.next ? ` · next ${esc(fmtAt(d.next))}` : ""}</div></div>
+        <div class="row" style="gap:8px">${status}${d.running ? "" : '<button class="btn sm" data-need="operator" onclick="weeklyTrimRun()">Run now</button>'}<button class="btn sm" data-need="admin" onclick="weeklyTrimTime()">Change time</button></div></div>
       <div style="margin-top:10px">${lines}</div>
       ${d.theirs ? `<div class="dim xs wt-line">Your trim job <span class="mono">${esc(d.theirs)}</span> already trims the default group, so this one does not run as well. Delete it under Recurring jobs to let Homestead trim attached volumes instead: Longhorn's fails on detached volumes and VM disks.</div>` : ""}
       <div class="between wt-foot"><label class="switch" data-need="admin"><input type="checkbox" id="wt_on" ${d.enabled ? "checked" : ""} onchange="weeklyTrimSwitch(this.checked)"> Trim weekly</label>
@@ -1075,13 +1085,32 @@ function weeklyTrimCard(d) {
 async function loadWeeklyTrim() {
   const host = document.getElementById("housekeeping");
   if (!host) return;
-  try { host.outerHTML = weeklyTrimCard(await api("/api/weekly-trim")); }
+  try { const d = await api("/api/weekly-trim"); STATE.data.weeklyTrim = d; host.outerHTML = weeklyTrimCard(d); }
   catch (e) { host.innerHTML = UI.section("Housekeeping", UI.callout("warn", "The weekly trim could not be read", esc(e.message))); }
 }
 
 window.weeklyTrimSwitch = async on => {
   try { const r = await api("/api/weekly-trim/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: on }) }); toast(r.detail, "ok"); loadWeeklyTrim(); }
   catch (e) { toast(e.message, "bad"); const box = $("#wt_on"); if (box) box.checked = !on; }
+};
+
+/* Move the trim to a weekday and hour of the cluster's choosing (#927): one
+   when no backup runs, so the two don't read the same volume at once. */
+window.weeklyTrimTime = () => {
+  const slot = trimSlot(STATE.data.weeklyTrim);
+  const days = TRIM_DAYS.map((name, i) => `<option value="${i}"${i === slot.weekday ? " selected" : ""}>${name}</option>`).join("");
+  const hours = [...Array(24).keys()].map(h => `<option value="${h}"${h === slot.hour ? " selected" : ""}>${trimHour(h)}</option>`).join("");
+  modal("Weekly trim time", `${UI.lead("Homestead trims every attached volume once a week, one at a time. Pick a time when no backup runs: a trim while a volume is backed up slows both down. The time is the cluster's clock, UTC.")}
+    ${UI.fields(UI.field("Day", `<select id="wt_day">${days}</select>`), UI.field("Hour (UTC)", `<select id="wt_hour">${hours}</select>`))}
+    <div class="ui-help">This week, under Schedules, shows the trim among the other jobs and marks a clash.</div>
+    ${UI.actions(`<button class="btn pri" onclick="weeklyTrimTimeSave()">Save</button><button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
+};
+window.weeklyTrimTimeSave = async () => {
+  const weekday = Number($("#wt_day")?.value), hour = Number($("#wt_hour")?.value);
+  try {
+    const r = await api("/api/weekly-trim/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ weekday, hour }) });
+    toast(r.detail, "ok"); closeModal(); loadWeeklyTrim();
+  } catch (e) { toast(e.message, "bad"); }
 };
 
 window.weeklyTrimRun = async () => {

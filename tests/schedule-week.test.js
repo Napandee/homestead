@@ -48,6 +48,20 @@ test("Longhorn runs are listed, and the two the server says clash are marked", (
   same(week.unread, []);
 });
 
+test("Homestead's own weekly trim is listed as Homestead's, and a clash with it is marked on its run (#927)", () => {
+  const { W } = setup();
+  const trim = { name: "Homestead weekly trim", task: "filesystem-trim", cron: "0 2 * * 6", volumes: ["pvc-a"], homestead: true };
+  const lh = { jobs: [LH.jobs[0]], homestead_jobs: [trim],
+    clashes: [{ severity: "clash", jobs: [{ name: "nightly-backup", task: "backup" }, { name: trim.name, task: "filesystem-trim" }],
+      volumes: ["pvc-a"], times: [[SAT_0200, SAT_0200]], count: 1, gap_min: 0 }] };
+  const week = W.collect({ lh }, FROM);
+  const runs = week.items.filter(i => i.name === trim.name);
+  same(runs.map(i => [iso(i.at), i.clash, i.kind, i.what]), [["2026-10-24T02:00", "clash", "Homestead", "trim"]]);
+  same(week.items.filter(i => i.name === "nightly-backup" && i.clash).map(i => iso(i.at)), ["2026-10-24T02:00"]);
+  // An older server's answer has no homestead_jobs: nothing changes.
+  assert.equal(W.collect({ lh: LH }, FROM).items.filter(i => i.kind === "Homestead").length, 0);
+});
+
 test("a job that runs more than six times a day is one 'runs all day' line, not 168 rows", () => {
   const { W } = setup();
   const week = W.collect({ lh: LH }, FROM);

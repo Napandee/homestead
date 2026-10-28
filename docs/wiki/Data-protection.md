@@ -138,8 +138,8 @@ still be going ([Settings](Settings#when-a-host-comes-back)).
 Files deleted inside a volume leave their space allocated in Longhorn until
 the filesystem is trimmed. Media, databases and VM disks can hold far more
 than their files use. So Homestead trims **every attached volume** itself,
-once a week: Saturdays at 04:00 UTC, one volume at a time, as a job in the
-job tray.
+once a week: Saturdays at 04:00 UTC unless you move it, one volume at a time,
+as a job in the job tray.
 
 - Longhorn trims a volume only while it's attached. A detached volume (a
   stopped app's) is skipped and named; the first weekly run that finds it
@@ -153,6 +153,10 @@ job tray.
   never raise anything.
 - **Data protection › Housekeeping** shows the last run, **Run now** (trims
   every attached volume now) and the switch that turns the weekly trim off.
+- **Change time** there moves the trim to another weekday and hour (UTC), for
+  a cluster whose backups run on Saturday mornings. A time that has already
+  passed this week takes effect next week. **This week** lists the trim as
+  Homestead's, and a backup starting with it on a volume is a clash.
 - A single volume's snapshot panel has **Trim now**.
 - If you have a trim job of your own for the default group, Homestead's
   doesn't run as well. Housekeeping names it; delete it to hand the trim back
@@ -164,7 +168,7 @@ changed its schedule or groups, it is yours: it stays, and Homestead's own
 weekly trim is off; to use Homestead's instead, delete that job and turn the
 weekly trim on under Housekeeping. If you had deleted it, Homestead's weekly
 trim starts off; turn it on there. After the update, Homestead's first run is
-the next Saturday's.
+the next one on its slot.
 
 ### Clashes, and the week ahead
 

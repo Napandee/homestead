@@ -146,7 +146,14 @@ def overview():
         return {"jobs": [], "jobs_unread": unread, "volumes": vols, "groups": names, "target": tgt, "tasks": TASKS,
                 "group_rows": [{"name": g, "volumes": [v["name"] for v in vols if g in v["groups"]], "jobs": []}
                                for g in names],
-                "protected": None, "backed_up": None, "unprotected": [], "total": len(vols), "clashes": []}
+                "protected": None, "backed_up": None, "unprotected": [], "total": len(vols), "clashes": [],
+                "homestead_jobs": []}
+    # Homestead's own weekly trim is no RecurringJob since #591, so it joins
+    # the clashes and This week as a job of its own (#927). Imported here:
+    # homestead_weekly_trim imports this module.
+    import homestead_weekly_trim as WEEKLY_TRIM
+    trim = WEEKLY_TRIM.schedule(vols, jobs)
+    homestead_jobs = [trim] if trim else []
     return {
         "jobs": jobs, "volumes": vols, "groups": names, "target": tgt,
         "tasks": TASKS,
@@ -157,8 +164,10 @@ def overview():
         "backed_up": sum(1 for v in vols if v["backed_up"]),
         "unprotected": [v["pvc"] or v["name"] for v in vols if not v["protected_by"]],
         "total": len(vols),
+        # Homestead's own scheduled work on the volumes: its weekly trim.
+        "homestead_jobs": homestead_jobs,
         # A trim or backup starting with a backup on a shared volume this week.
-        "clashes": CLASHES.clashes(jobs),
+        "clashes": CLASHES.clashes(jobs + homestead_jobs),
     }
 
 
