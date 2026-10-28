@@ -22,7 +22,7 @@ async function releasedVolumesReview() {
   if (r.state === "unknown") return modal(title, UI.callout("warn", "Could not read Released volumes", esc(r.error || "")) + UI.actions(UI.cancel("Close")));
   if (!rows.length) return modal(title, UI.empty("No Released volumes: every kept volume has a claim.") + UI.actions(UI.cancel("Close")));
   const n = rows.length, total = leftoverGiB(rows.reduce((sum, v) => sum + (v.allocated_bytes || 0), 0));
-  // The reviewed delete finds the volume's claim by name; a new claim of
+  // Deleting after review finds the volume's claim by name; a new claim of
   // that name is another volume's, and that review would refuse it.
   const action = (v, i) => v.old_copy
     ? UI.button("Remove old copy", `releasedVolumeDelete(${i})`, { kind: "danger", attrs: 'data-need="admin"' })
