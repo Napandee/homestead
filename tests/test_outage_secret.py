@@ -16,9 +16,11 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import homestead_names as NAMES
 import homestead_outage as O
 import homestead_outage_secret as S
+from fakes.kube import Kube
 from test_outage_formats import FakeCase, SECRET
 
 ITEM = {"kind": "app", "ns": "lab", "name": "frigate"}
@@ -28,85 +30,58 @@ SECRETS = "/api/v1/namespaces/lab/secrets"
 KEY = NAMES.key(O.KEY)
 
 
-def missing(path):
-    return urllib.error.HTTPError(path, 404, "missing", {}, None)
-
-
 class Cluster:
-    """Deployments, VMs and Secrets as the API server keeps them: a create of
-    one that exists is refused, a patch naming an old resourceVersion too."""
+    """Deployments, VMs and Secrets on the shared fake API server (tests/fakes/kube.py), which refuses a create
+    of one that exists and a patch or delete naming an old resourceVersion."""
 
     def __init__(self):
-        self.objects, self.writes, self.version = {}, [], 10
+        self.kube = Kube()
+
+    @property
+    def writes(self):
+        return [(method, path, body) for method, path, body, _ in self.kube.writes]
 
     def kget(self, path):
-        if path not in self.objects:
-            raise missing(path)
-        return json.loads(json.dumps(self.objects[path]))
+        return self.kube("GET", path)
 
-    def _stamp(self, obj):
-        self.version += 1
-        obj.setdefault("metadata", {})["resourceVersion"] = str(self.version)
-        return obj
+    def ksend(self, method, path, body=None, ctype="application/json", **options):
+        return self.kube(method, path, body, ctype)
 
-    def ksend(self, method, path, body=None, **options):
-        self.writes.append((method, path, json.loads(json.dumps(body)) if body is not None else None))
-        if method == "POST":
-            path = f"{path}/{body['metadata']['name']}"
-            if path in self.objects:
-                raise urllib.error.HTTPError(path, 409, "exists", {}, None)
-            self.objects[path] = self._stamp(json.loads(json.dumps(body)))
-            return json.loads(json.dumps(self.objects[path]))
-        if path not in self.objects:
-            raise missing(path)
-        if method == "DELETE":
-            named = ((body or {}).get("preconditions") or {}).get("resourceVersion")
-            if named and named != self.objects[path]["metadata"].get("resourceVersion"):
-                raise urllib.error.HTTPError(path, 409, "conflict", {}, None)
-            return self.objects.pop(path)
-        if method == "PUT":
-            named = (body.get("metadata") or {}).get("resourceVersion")
-            if named and named != self.objects[path]["metadata"].get("resourceVersion"):
-                raise urllib.error.HTTPError(path, 409, "conflict", {}, None)
-            self.objects[path] = self._stamp(json.loads(json.dumps(body)))
-            return json.loads(json.dumps(self.objects[path]))
-        meta = self.objects[path]["metadata"]
-        sent = body["metadata"]
-        if sent.get("resourceVersion") and sent["resourceVersion"] != meta["resourceVersion"]:
-            raise urllib.error.HTTPError(path, 409, "conflict", {}, None)
-        annotations = meta.setdefault("annotations", {})
-        for key, value in sent.get("annotations", {}).items():
-            if value is None:
-                annotations.pop(key, None)
-            else:
-                annotations[key] = value
-        self._stamp(self.objects[path])
-        return self.objects[path]
+    def object(self, path):
+        return self.kube.object(path)
+
+    def change(self, path, mutate):
+        obj = self.kube.object(path)
+        mutate(obj)
+        self.kube.add(obj)
+
+    def discard(self, path):
+        """Gone as if something outside the app deleted it: the delete is not counted among the app's writes."""
+        self.kube("DELETE", path)
+        self.kube.writes.pop()
 
     def add(self, item, actions=None):
-        path = O._path_of(item["kind"], item["ns"], item["name"])
         annotations = {KEY: json.dumps(actions)} if actions else {}
         kind = ({"apiVersion": "kubevirt.io/v1", "kind": "VirtualMachine"} if item["kind"] == "vm"
                 else {"apiVersion": "apps/v1", "kind": "Deployment"})
-        self.objects[path] = self._stamp({**kind, "metadata": {"name": item["name"], "namespace": item["ns"],
-                                                               "annotations": annotations}})
-        return path
+        return self.kube.add({**kind, "metadata": {"name": item["name"], "namespace": item["ns"],
+                                                   "annotations": annotations}})
 
     def annotation(self, item=ITEM):
-        raw = self.objects[O._path_of(item["kind"], item["ns"], item["name"])]["metadata"]["annotations"].get(KEY)
+        raw = self.object(O._path_of(item["kind"], item["ns"], item["name"]))["metadata"]["annotations"].get(KEY)
         return json.loads(raw) if raw else None
 
     def secret(self, name):
-        return self.objects.get(f"{SECRETS}/{name}")
+        return self.object(f"{SECRETS}/{name}")
 
     def kept(self, name):
         found = self.secret(name)
         return base64.b64decode(found["data"]["webhook"]).decode() if found else None
 
     def foreign(self, name, url=REAL, labels=None):
-        self.objects[f"{SECRETS}/{name}"] = self._stamp({
-            "metadata": {"name": name, "namespace": "lab", "labels": labels or {}},
-            "data": {"webhook": base64.b64encode(url.encode()).decode()}})
+        self.kube.add({"apiVersion": "v1", "kind": "Secret",
+                       "metadata": {"name": name, "namespace": "lab", "labels": labels or {}},
+                       "data": {"webhook": base64.b64encode(url.encode()).decode()}})
 
 
 class Base(FakeCase):
@@ -139,7 +114,7 @@ class Base(FakeCase):
 
     def shown(self, item=ITEM):
         path = O._path_of(item["kind"], item["ns"], item["name"])
-        return O.read(self.cluster.objects[path]["metadata"]["annotations"], NAMES)
+        return O.read(self.cluster.object(path)["metadata"]["annotations"], NAMES)
 
     def send_later(self, item=ITEM):
         shown = self.shown(item)
@@ -154,7 +129,7 @@ class SaveTests(Base):
     def test_a_token_goes_into_the_apps_secret_and_never_onto_the_deployment(self):
         self.cluster.add(ITEM)
         answer = self.save({"webhook": REAL, "format": "gotify", "restart": {"after_min": 5, "max": 2}})
-        deployment = json.dumps(self.cluster.objects[O._path_of("app", "lab", "frigate")])
+        deployment = json.dumps(self.cluster.object(O._path_of("app", "lab", "frigate")))
         self.assertNotIn(SECRET, deployment)
         self.assertNotIn(SECRET, json.dumps(answer))
         self.assertEqual({"restart": {"after_min": 5, "max": 2}, "webhook": "https://gotify.example.com/(hidden)",
@@ -173,7 +148,8 @@ class SaveTests(Base):
     def test_a_vm_has_its_own_secret_beside_an_app_of_the_same_name(self):
         self.cluster.add(ITEM)
         self.cluster.add(VM, {"restart": None})
-        self.cluster.objects[O._path_of("vm", "lab", "frigate")]["metadata"]["annotations"][NAMES.key("uptime")] = "tcp:22"
+        self.cluster.change(O._path_of("vm", "lab", "frigate"),
+                            lambda vm: vm["metadata"]["annotations"].update({NAMES.key("uptime"): "tcp:22"}))
         self.save({"webhook": REAL, "format": "gotify"})
         self.save({"webhook": REAL.replace("gotify.", "vm."), "format": "gotify"}, VM)
         self.assertEqual("homestead-outage-vm-frigate", self.cluster.annotation(VM)["secret"])
@@ -250,7 +226,7 @@ class SaveTests(Base):
         # A whole address typed in the YAML, with another app's Secret named beside it.
         self.cluster.add(ITEM, {"webhook": REAL, "format": "gotify", "secret": "homestead-outage-app-other"})
         self.save(None)
-        O.forget("app", "lab", self.cluster.objects[O._path_of("app", "lab", "frigate")])
+        O.forget("app", "lab", self.cluster.object(O._path_of("app", "lab", "frigate")))
         self.assertEqual(REAL, self.cluster.kept("homestead-outage-app-other"))
 
     def test_a_save_after_a_rename_moves_the_address_to_the_new_name(self):
@@ -259,7 +235,7 @@ class SaveTests(Base):
         self.cluster.add({**ITEM, "name": "old"})
         self.save({"webhook": REAL, "format": "gotify"}, {**ITEM, "name": "old"})
         self.cluster.add(ITEM, self.cluster.annotation({**ITEM, "name": "old"}))
-        del self.cluster.objects[O._path_of("app", "lab", "old")]
+        self.cluster.discard(O._path_of("app", "lab", "old"))
         self.assertEqual(REAL, O._stored_actions("app", "lab", "frigate")["webhook"])
         self.save({**self.shown(), "format": "gotify"})
         self.assertEqual(REAL, self.cluster.kept("homestead-outage-app-frigate"))
@@ -312,7 +288,7 @@ class UseTests(Base):
         fake = self.fake()
         self.cluster.add(ITEM)
         self.save({"webhook": self.named(fake, f"/x?token={SECRET}"), "format": "generic"})
-        del self.cluster.objects[f"{SECRETS}/homestead-outage-app-frigate"]
+        self.cluster.discard(f"{SECRETS}/homestead-outage-app-frigate")
         record = self.send_later()
         self.assertFalse(record["ok"])
         self.assertEqual([], fake.got)
@@ -337,12 +313,12 @@ class MoveTests(Base):
                           "secret": "homestead-outage-vm-frigate"}, self.cluster.annotation(VM))
         self.assertEqual(REAL, self.cluster.kept("homestead-outage-app-frigate"))
         self.assertEqual(REAL, O._stored_actions("app", "lab", "frigate")["webhook"], "nothing lost")
-        self.assertNotIn(SECRET, json.dumps(self.cluster.objects[O._path_of("app", "lab", "frigate")]))
+        self.assertNotIn(SECRET, json.dumps(self.cluster.object(O._path_of("app", "lab", "frigate"))))
 
     def test_once_moved_nothing_is_read_or_written_again(self):
         self.cluster.add(ITEM, {"webhook": REAL, "format": "gotify"})
         O.migrate(self.found(ITEM))
-        self.cluster.writes.clear()
+        self.cluster.kube.writes.clear()
         with mock.patch.object(self.cluster, "kget", side_effect=AssertionError("read again")):
             O._bound["kget"] = self.cluster.kget
             self.assertEqual([], O.migrate(self.found(ITEM)))
@@ -399,7 +375,7 @@ class MoveTests(Base):
         self.save({"webhook": REAL, "format": "gotify"}, old)
         # The rename: a clone with the same annotation, the old app deleted as it is.
         self.cluster.add(ITEM, self.cluster.annotation(old))
-        del self.cluster.objects[O._path_of("app", "lab", "old")]
+        self.cluster.discard(O._path_of("app", "lab", "old"))
         self.assertEqual(REAL, O._stored_actions("app", "lab", "frigate")["webhook"], "still called after the rename")
         self.assertEqual(["app:lab/frigate"], O.migrate(self.found(ITEM)))
         self.assertEqual("homestead-outage-app-frigate", self.cluster.annotation()["secret"])
@@ -522,7 +498,7 @@ class ResourcesTests(Base):
         self.assertEqual(["app:lab/frigate"], O.migrate(O.items([{"ns": "lab", "name": "frigate",
                                                                   "outage_actions": self.shown()}], [])))
         self.assertEqual(typed, self.cluster.kept("homestead-outage-app-frigate"))
-        self.assertNotIn("Typed123Token", json.dumps(self.cluster.objects[O._path_of("app", "lab", "frigate")]))
+        self.assertNotIn("Typed123Token", json.dumps(self.cluster.object(O._path_of("app", "lab", "frigate"))))
 
 
 def patched(stack, modules, name, **kw):
@@ -570,7 +546,7 @@ class DeleteTests(Base):
             patched(stack, [V], "_datavolumes", return_value={})
             V.delete("lab", "frigate")
         self.assertIsNone(self.cluster.secret("homestead-outage-vm-frigate"))
-        self.assertNotIn(O._path_of("vm", "lab", "frigate"), self.cluster.objects)
+        self.assertIsNone(self.cluster.object(O._path_of("vm", "lab", "frigate")))
 
 
 if __name__ == "__main__":
