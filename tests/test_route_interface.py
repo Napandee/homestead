@@ -311,8 +311,9 @@ class Answering(unittest.TestCase):
         self.assertEqual((200, {"ok": True}, "application/json"), handler._send.call_args.args)
 
     def test_a_refused_reply_is_a_500_and_carries_none_of_its_cookies(self):   # D4
-        handler = self.handler("/api/test/refused", ROUTES.Reply(
-            200, {}, cookies=(C("homestead_session", "ok", max_age=1),), headers=(("Set-Cookie", "x=1"),)))
+        handler = answering(self, "/api/test/refused", ROUTES.Reply(        # its owner: the header alone is refused
+            200, {}, cookies=(C("homestead_session", "ok", max_age=1),), headers=(("Set-Cookie", "x=1"),)),
+            module="homestead_auth_routes")
         handler.do_POST()
         self.assertEqual(500, handler._send.call_args.args[0])
         self.assertFalse(any("homestead_session=ok" in value for _, value in handler._extra_headers))
@@ -384,6 +385,12 @@ class CookieOwners(unittest.TestCase):
     def test_each_cookie_has_exactly_one_owner(self):
         self.assertEqual({name: module for name, module, _ in OWNED}, ROUTES.owners())
         self.assertEqual(set(ROUTES.COOKIES), set(ROUTES.owners()))
+
+    def test_owners_are_read_once_with_the_table(self):                    # review I2
+        ROUTES.table()
+        with mock.patch.object(ROUTES.importlib, "import_module", side_effect=AssertionError("read again")):
+            self.assertEqual({name: module for name, module, _ in OWNED}, ROUTES.owners())
+            self.assertEqual(200, self.send(OWNED[0][2], OWNED[0][1])._send.call_args.args[0])
 
     def test_the_owner_sets_its_cookie_as_before(self):
         for name, module, cookie in OWNED:

@@ -35,8 +35,7 @@ Proxy-Authorization, Cf-Access-Jwt-Assertion and the fleet signature; Homestead'
 own cookies; whether it came over TLS or through Cloudflare; and who the guard
 found - the Access sign-in, the linked Homestead, the API key - with `who()` for
 the session. A Reply sets Homestead's own cookies (`cookies=(Cookie(...),)`, each
-at its own path, and each only from the module that owns it: the one whose
-`OWN_COOKIES = ("homestead_session",)` names it) and only the ROUTE_HEADERS (`headers=(("Location", "/"),)`); its
+at its own path and only from the module whose OWN_COOKIES names it, #936) and only the ROUTE_HEADERS (`headers=(("Location", "/"),)`); its
 status and type are checked too, all before anything is written: one that is
 refused (`Refused`) is answered 500, with none of them. A path ending "/*" is a
 prefix route: it answers the plain paths under it (no ., .., // or %).
@@ -361,7 +360,7 @@ def _owned(cookie, module, owned):
     owner = owned.get(cookie.name)
     if cookie.name in COOKIES and owner != module:
         raise Refused(f"a route in {module} may not set cookie {cookie.name}: "
-                      f"only {owner or 'no module'} sets it (OWN_COOKIES)")
+                      + (f"only {owner} sets it (OWN_COOKIES)" if owner else "no module owns it (OWN_COOKIES)"))
     return cookie
 
 
@@ -388,6 +387,8 @@ def answer(handler, answer, module):
         handler._send(200, answer)
 
 _table = {}
+# The table the cookies' owners were read with, and the owners (owners()).
+_owned_by = [None, {}]
 # How long the pages' main reads (overview, hosts, apps, VMs, volumes,
 # storage) are kept for the UI: longer than its 15 s refresh, so a refresh can
 # be served from the last one (#705). A write Homestead makes to what they show
@@ -470,6 +471,7 @@ def table():
                 raise ValueError(f"{method} {path} in {name} covers a path answered elsewhere")
             found[key] = Route(key[0], path, role, handler, name)
     _table.update(found)
+    _owned_by[:] = [_table, owned]
     return _table
 
 
@@ -489,12 +491,14 @@ def _claim(owned, name, module):
 
 def owners():
     """Each cookie a module owns, by name, with that module: only it may set
-    the cookie (answer())."""
-    table()
-    owned = {}
-    for name in MODULES:
-        _claim(owned, name, importlib.import_module(name))
-    return owned
+    the cookie (answer()). Read with the table, once."""
+    routes = table()
+    if _owned_by[0] is not routes:     # a table put in place without table() reading it (a test's)
+        owned = {}
+        for name in MODULES:
+            _claim(owned, name, importlib.import_module(name))
+        _owned_by[:] = [routes, owned]
+    return dict(_owned_by[1])
 
 
 def _covers(method, stem):
