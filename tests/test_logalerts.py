@@ -833,5 +833,27 @@ class Wiring(unittest.TestCase):
         self.assertLess(loop.index("LOGALERTS.start()"), loop.index("while True"))
 
 
+class WikiTests(unittest.TestCase):
+    """The wiki page for log alerts is linked, and quotes the limits the code has."""
+
+    ROOT = os.path.join(os.path.dirname(__file__), "..")
+
+    def read(self, name):
+        with open(os.path.join(self.ROOT, "docs", "wiki", name), encoding="utf-8") as handle:
+            return " ".join(handle.read().split())
+
+    def test_the_page_is_linked_from_the_sidebar_home_and_containers(self):
+        for name in ("_Sidebar.md", "Home.md", "Containers.md"):
+            self.assertIn("(Log-alerts)", self.read(name), name)
+
+    def test_the_page_quotes_the_limits_in_the_code(self):
+        page = self.read("Log-alerts.md")
+        self.assertIn(f"runs out of time {LA.AUTO_PAUSE} counts in a row", page)
+        self.assertIn(f"There can be {LA.MAX_RULES} alerts", page)
+        self.assertIn(f"at most {LA.MAX_CONTAINERS} containers a minute", page)
+        self.assertIn(f"gets {LA.REGEX_SECONDS} seconds of matching", page)
+        self.assertIn("`list_log_alerts`", page)
+
+
 if __name__ == "__main__":
     unittest.main()

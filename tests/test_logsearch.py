@@ -145,6 +145,27 @@ class ExpressionTimeTests(unittest.TestCase):
         self.assertEqual(list(range(checked)), hits, "every line before the cut that matched, nothing after it")
         self.assertEqual(([], 0), LS.run_regex(["ERROR"], "ERROR", False, 0), "no time left: not started")
 
+    def test_the_childs_startup_does_not_count_against_the_limit(self):
+        # #929 follow-up: a child that takes 1.5 s to come up, a limit of 1 s.
+        slow_start = "import time;time.sleep(1.5)\n" + LS._CHILD
+        with mock.patch.object(LS, "_CHILD", slow_start):
+            self.assertEqual(([0], 1), LS.run_regex(["ERROR"], "ERROR", False, 1))
+            with mock.patch.object(LS, "REGEX_SECONDS", 1):
+                budget = LS._Budget("ERROR", False)
+                self.assertEqual(([0], 1), budget.run(["ERROR"]))
+                self.assertGreater(budget.left, 0.9, "start-up is not taken from the search's time")
+                d = LS.search(WORKLOADS, "ERROR", lambda *a: "2026-10-07T09:00:00Z ERROR x\n",
+                              apps=["lab/frigate"], regex=True)
+        self.assertEqual(([], 1), (d["cut"], d["total"]))
+
+    def test_a_child_that_never_comes_up_is_named_not_waited_for(self):
+        with mock.patch.object(LS, "_CHILD", "import time;time.sleep(30)\n"), \
+                mock.patch.object(LS, "READY_SECONDS", 0.3):
+            began = time.monotonic()
+            with self.assertRaises(ValueError):
+                LS.run_regex(["ERROR"], "ERROR", False, 5)
+        self.assertLess(time.monotonic() - began, 3)
+
     def test_a_row_cut_by_the_kill_is_not_read(self):
         # "c 1" cut from "c 12": only whole rows (ending in a newline) count.
         self.assertEqual(([0], 3), LS._child_rows("m 0\nc 3\nc 1"))

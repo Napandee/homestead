@@ -13,13 +13,14 @@ it could take ages to run (a repeated group holding a repeat or a choice).
 That check is by shape and lets some slow ones through (`^(x?){40}x{40}$`),
 and Python cannot stop a regular expression mid-match in a thread, so an
 expression is matched in a child process (run_regex), one at a time, within
-REGEX_SECONDS for the whole search. Each container's newest lines go first;
-when the time runs out the child is killed, what it matched so far is kept,
+REGEX_SECONDS of matching for the whole search (a child's start-up is free).
+Each container's newest lines go first; when the time runs out the child is killed, what it matched so far is kept,
 and the answer names the apps that were only partly searched ("cut").
 """
 import contextlib
 import json
 import re
+import select
 import subprocess
 import sys
 import threading
@@ -31,6 +32,7 @@ MAX_BYTES = 2 * 1024 * 1024        # per container
 MAX_LINE = 2000
 MAX_MATCHES = 500
 REGEX_SECONDS = 10                 # matching time an expression may take, per search
+READY_SECONDS = 5                  # a child not up by then could not be run
 REGEX_READERS = 2                  # containers read at once for an expression: matching is one at a time
 WINDOWS = {"15m": 900, "1h": 3600, "6h": 21600, "24h": 86400}
 _SLOW = re.compile(r"\([^)]*[*+|][^)]*\)\s*[*+{]")   # (a+)+, (a|aa)* and the like
@@ -58,10 +60,12 @@ def matcher(query, regex=False, case=False):
 
 
 # The child that matches an expression: the query and lines on stdin; on
-# stdout "m <i>" for each matching line and "c <n>" once the first n lines
-# are checked, flushed every 256 lines or 0.1 s, so a kill loses at most
-# those. Run with -I: no site, no cwd.
+# stdout "r" once it is up (the time limit starts then, not before), then
+# "m <i>" for each matching line and "c <n>" once the first n lines are
+# checked, flushed every 256 lines or 0.1 s, so a kill loses at most those.
+# Run with -I: no site, no cwd.
 _CHILD = ("import json,re,sys,time\n"
+          "sys.stdout.write('r\\n');sys.stdout.flush()\n"
           "d=json.load(sys.stdin)\n"
           "p=re.compile(d['q'],0 if d['c'] else re.I)\n"
           "o=sys.stdout;t=time.monotonic();k=0\n"
@@ -74,10 +78,17 @@ _CHILD = ("import json,re,sys,time\n"
 
 def run_regex(lines, query, case, limit):
     """(indexes of the lines that match, how many lines were checked), the
-    expression run in a child process killed after `limit` seconds: fewer
-    checked than given means the time ran out. ValueError when it cannot run."""
+    expression run in a child process killed after `limit` seconds of
+    matching (its start-up, about 0.1 s, is not counted): fewer checked than
+    given means the time ran out. ValueError when it cannot run."""
+    hits, checked, _spent = _run(lines, query, case, limit)
+    return hits, checked
+
+
+def _run(lines, query, case, limit):
+    """run_regex, and the seconds the matching took, start-up left out."""
     if not lines or limit <= 0:
-        return [], 0
+        return [], 0, 0.0
     payload = json.dumps({"q": query, "c": bool(case), "l": list(lines)})
     try:
         child = subprocess.Popen([sys.executable, "-I", "-c", _CHILD], stdin=subprocess.PIPE,
@@ -86,20 +97,27 @@ def run_regex(lines, query, case, limit):
         raise ValueError("the expression could not be run") from None
     killed = False
     try:
+        if not select.select([child.stdout], [], [], READY_SECONDS)[0] or child.stdout.readline() != "r\n":
+            raise ValueError("the expression could not be run")
+        began = time.monotonic()           # the child is up: the limit starts here
         try:
             out, _ = child.communicate(payload, timeout=limit)
         except subprocess.TimeoutExpired:
             child.kill()
             out, _ = child.communicate()   # what it wrote before the kill
             killed = True
+        spent = time.monotonic() - began
     finally:
         if child.poll() is None:
             child.kill()
             child.wait()
+        for pipe in (child.stdin, child.stdout):
+            with contextlib.suppress(OSError, ValueError):
+                pipe.close()
     if not killed and child.returncode != 0:
         raise ValueError("the expression could not be run")
     hits, checked = _child_rows(out)
-    return hits, min(checked, len(lines))
+    return hits, min(checked, len(lines)), spent
 
 
 def _child_rows(out):
@@ -157,11 +175,9 @@ class _Budget:
 
     def run(self, lines):
         with self.lane:
-            began = time.monotonic()
-            try:
-                return run_regex(lines, self.query, self.case, self.left)
-            finally:
-                self.left -= time.monotonic() - began
+            hits, checked, spent = _run(lines, self.query, self.case, self.left)
+            self.left -= spent             # matching time only: start-up is free
+            return hits, checked
 
 
 @contextlib.contextmanager
