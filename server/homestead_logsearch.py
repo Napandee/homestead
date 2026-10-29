@@ -33,6 +33,7 @@ MAX_LINE = 2000
 MAX_MATCHES = 500
 REGEX_SECONDS = 10                 # matching time an expression may take, per search
 READY_SECONDS = 5                  # a child not up by then could not be run
+STARTUP_FREE = 2                   # seconds of a child's start-up not charged to the search; the rest is
 REGEX_READERS = 2                  # containers read at once for an expression: matching is one at a time
 WINDOWS = {"15m": 900, "1h": 3600, "6h": 21600, "24h": 86400}
 _SLOW = re.compile(r"\([^)]*[*+|][^)]*\)\s*[*+{]")   # (a+)+, (a|aa)* and the like
@@ -76,6 +77,14 @@ _CHILD = ("import json,re,sys,time\n"
           "o.write('c %d\\n'%len(d['l']));o.flush()\n")
 
 
+class NotUp(ValueError):
+    """The child did not come up; .spent is the time waited for it."""
+
+    def __init__(self, spent=0.0):
+        super().__init__("the expression could not be run")
+        self.spent = spent
+
+
 def run_regex(lines, query, case, limit):
     """(indexes of the lines that match, how many lines were checked), the
     expression run in a child process killed after `limit` seconds of
@@ -97,9 +106,11 @@ def _run(lines, query, case, limit):
         raise ValueError("the expression could not be run") from None
     killed = False
     try:
+        asked = time.monotonic()
         if not select.select([child.stdout], [], [], READY_SECONDS)[0] or child.stdout.readline() != "r\n":
-            raise ValueError("the expression could not be run")
+            raise NotUp(time.monotonic() - asked)
         began = time.monotonic()           # the child is up: the limit starts here
+        late = max(0.0, began - asked - STARTUP_FREE)   # a start-up this slow is charged
         try:
             out, _ = child.communicate(payload, timeout=limit)
         except subprocess.TimeoutExpired:
@@ -117,7 +128,7 @@ def _run(lines, query, case, limit):
     if not killed and child.returncode != 0:
         raise ValueError("the expression could not be run")
     hits, checked = _child_rows(out)
-    return hits, min(checked, len(lines)), spent
+    return hits, min(checked, len(lines)), spent + late
 
 
 def _child_rows(out):
@@ -175,8 +186,12 @@ class _Budget:
 
     def run(self, lines):
         with self.lane:
-            hits, checked, spent = _run(lines, self.query, self.case, self.left)
-            self.left -= spent             # matching time only: start-up is free
+            try:
+                hits, checked, spent = _run(lines, self.query, self.case, self.left)
+            except NotUp as error:
+                self.left -= error.spent   # waiting for a child that never came up is spent time
+                raise
+            self.left -= spent             # matching time, and start-up beyond STARTUP_FREE
             return hits, checked
 
 

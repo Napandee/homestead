@@ -23,7 +23,7 @@ refused.
 4. Choose how to **raise it**: Information, Warning or Critical.
 5. **Try on the last hour** shows the matching lines per minute for the past
    hour as bars, the minutes that would have been over the threshold, and a
-   warning when it would be raised most of the time. It shows counts only and
+   warning when it would be over the threshold in more than 20 of the 60 minutes. It shows counts only and
    never saves anything.
 6. **Save alert.**
 
@@ -35,7 +35,7 @@ counts again; other edits keep them.
 
 The leader counts once a minute, a couple of seconds after the minute ends, and
 reads only what each app wrote since the last count: up to 256 KB from each
-container, and at most 40 containers a minute across all alerts. If an alert
+container (twice that for one that restarted), and at most 40 containers a minute across all alerts. If an alert
 would go over that, the apps left out are named on its row and the rotation
 starts at a different alert each minute. Only the leader counts; the list warns
 when nothing has been counted for three minutes.
@@ -53,7 +53,7 @@ alert nor ends one that is raised.
 
 When a container has restarted since the last count, Homestead reads the log of
 the container before it as well, so the lines it wrote before it died count.
-Lines in both logs are counted once. If that earlier log cannot be read (a node
+Lines already counted are skipped, so none is counted twice. If that earlier log cannot be read (a node
 rebooted, say), that minute shows as **Could not count**, and counting carries
 on the next minute. Restarts that happened before Homestead first looked, or
 before a different host became the leader, are not treated as news.
@@ -74,7 +74,7 @@ paused by Homestead. Its row says why ("Homestead paused it: its expression ran
 out of time 10 minutes in a row. Make the expression simpler, or use plain text,
 then resume it."). If the alert had been raised, it ends as "*name*: paused by
 Homestead"; if not, the bell gets that notice once, so you are told without it
-repeating "ran out of time" every minute. A count that finishes in time starts
+repeating "ran out of time" every minute. Any minute that is not out of time starts
 the streak again, so only 10 in a row pause it. Auto-pause does not apply to
 plain text.
 

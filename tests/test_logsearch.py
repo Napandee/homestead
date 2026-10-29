@@ -158,6 +158,18 @@ class ExpressionTimeTests(unittest.TestCase):
                               apps=["lab/frigate"], regex=True)
         self.assertEqual(([], 1), (d["cut"], d["total"]))
 
+    def test_a_very_slow_start_and_a_child_that_never_comes_up_are_charged_to_the_search(self):
+        slow_start = "import time;time.sleep(1.2)\n" + LS._CHILD
+        with mock.patch.object(LS, "_CHILD", slow_start), mock.patch.object(LS, "STARTUP_FREE", 0.5):
+            budget = LS._Budget("ERROR", False)
+            budget.run(["ERROR"])
+            self.assertLess(budget.left, LS.REGEX_SECONDS - 0.5, "start-up beyond the free part is spent")
+        with mock.patch.object(LS, "_CHILD", "import time;time.sleep(30)\n"), mock.patch.object(LS, "READY_SECONDS", 0.4):
+            budget = LS._Budget("ERROR", False)
+            with self.assertRaises(ValueError):
+                budget.run(["ERROR"])
+            self.assertLess(budget.left, LS.REGEX_SECONDS - 0.3, "the wait for a child that never came up is spent")
+
     def test_a_child_that_never_comes_up_is_named_not_waited_for(self):
         with mock.patch.object(LS, "_CHILD", "import time;time.sleep(30)\n"), \
                 mock.patch.object(LS, "READY_SECONDS", 0.3):
