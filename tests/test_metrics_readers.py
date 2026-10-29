@@ -92,40 +92,72 @@ class VmUsageTests(Looping):
         saved = VMUSAGE.kget
         VMUSAGE.bind(never_metrics(answers))
         self.addCleanup(VMUSAGE.bind, saved)
-        VMUSAGE._readings.clear(); VMUSAGE._usage.clear()
-        self.addCleanup(VMUSAGE._usage.clear)
+        VMUSAGE._readings.clear()
 
-    def test_the_sampler_takes_the_loop_s_reading(self):
+    def test_usage_takes_the_loop_s_reading(self):
         self.round(pods=POD_METRICS, now=1000.0)
         VMUSAGE.sample(fetch=lambda ip: "", now=1001.0)
-        self.assertEqual(0.25, VMUSAGE.usage(now=1001.0)[0][("lab", "ubuntu")]["cpu"])
-        self.assertEqual("ok", VMUSAGE.metrics_state()["state"])
+        measured, _, metrics = VMUSAGE.measured(now=1001.0)
+        self.assertEqual(0.25, measured[("lab", "ubuntu")]["cpu"])
+        self.assertEqual("ok", metrics["state"])
 
     def test_missing_figures_are_said(self):
         self.round(error=TimeoutError("timed out"), now=1000.0)
         VMUSAGE.sample(fetch=lambda ip: "", now=1001.0)
-        self.assertEqual({}, VMUSAGE.usage(now=1001.0)[0])
-        self.assertEqual("unavailable", VMUSAGE.metrics_state()["state"])
+        measured, _, metrics = VMUSAGE.measured(now=1001.0)
+        self.assertEqual(({}, "unavailable"), (measured, metrics["state"]))
 
-    def test_the_vm_list_rows_carry_the_state(self):
+    def test_the_sampler_reads_only_disk_traffic(self):
+        # CPU and memory come from the loop's reading when asked for, so the
+        # 30 s sample no longer holds them (#928 follow-up).
+        with mock.patch.object(M, "read", side_effect=AssertionError("read CPU and memory in the sample")):
+            VMUSAGE.sample(fetch=lambda ip: "", now=1001.0)
+
+    def vm_rows(self, *vms, now):
         import homestead_vm_list as VM_LIST
         import homestead_vms as VMS
-        self.round(error=TimeoutError("timed out"), now=1000.0)
-        VMUSAGE.sample(fetch=lambda ip: "", now=1001.0)
-        vms = [{"apiVersion": "kubevirt.io/v1", "kind": "VirtualMachine",
-                "metadata": {"name": name, "namespace": "lab", "uid": name},
-                "spec": {"runStrategy": "Always" if running else "Halted",
-                         "template": {"spec": {"domain": {"cpu": {"cores": 2}, "memory": {"guest": "2Gi"}}}}},
-                "status": {"printableStatus": "Running" if running else "Stopped"}}
-               for name, running in (("router", True), ("spare", False))]
-        self.enterContext(Kube(*vms))
+        objects = []
+        for name, running in vms:
+            objects.append({"apiVersion": "kubevirt.io/v1", "kind": "VirtualMachine",
+                            "metadata": {"name": name, "namespace": "lab", "uid": name},
+                            "spec": {"runStrategy": "Always" if running else "Halted",
+                                     "template": {"spec": {"domain": {"cpu": {"cores": 2}, "memory": {"guest": "2Gi"}}}}},
+                            "status": {"printableStatus": "Running" if running else "Stopped"}})
+            if running:
+                objects.append({"apiVersion": "kubevirt.io/v1", "kind": "VirtualMachineInstance",
+                                "metadata": {"name": name, "namespace": "lab", "uid": name + "-vmi"},
+                                "status": {"phase": "Running"}})
+        self.enterContext(Kube(*objects))
         saved = (VMS.kget, VMS.ksend)
         VMS.bind(K.kget, K.ksend, lambda *a, **k: [])
         self.addCleanup(lambda: VMS.bind(*saved, lambda *a, **k: []))
-        rows = VM_LIST.list_vms()
+        with mock.patch("time.time", return_value=now):
+            return VM_LIST.list_vms()
+
+    def test_the_vm_list_rows_carry_the_state(self):
+        self.round(error=TimeoutError("timed out"), now=1000.0)
+        VMUSAGE.sample(fetch=lambda ip: "", now=1001.0)
+        rows = self.vm_rows(("router", True), ("spare", False), now=1001.0)
         self.assertEqual(["router", "spare"], [row["name"] for row in rows])
         self.assertEqual(["unavailable"] * 2, [row["metrics"]["state"] for row in rows], "said on every row")
         self.assertFalse([row for row in rows if "usage" in row])
+
+    def test_the_vm_list_has_figures_read_since_the_last_sample(self):
+        # The sample found nothing yet; the loop has answered since.
+        self.round(error=TimeoutError("timed out"), now=1000.0)
+        VMUSAGE.sample(fetch=lambda ip: "", now=1001.0)
+        self.round(pods=POD_METRICS, now=1010.0)
+        row = self.vm_rows(("ubuntu", True), now=1011.0)[0]
+        self.assertEqual("ok", row["metrics"]["state"])
+        self.assertEqual(12.5, row["usage"]["cpu_pct"])
+
+    def test_the_vm_list_says_figures_went_old_since_the_last_sample(self):
+        self.round(pods=POD_METRICS, now=1000.0)
+        VMUSAGE.sample(fetch=lambda ip: "", now=1001.0)
+        self.round(error=TimeoutError("timed out"), now=1015.0)
+        row = self.vm_rows(("ubuntu", True), now=1029.0)[0]
+        self.assertEqual(("stale", 29), (row["metrics"]["state"], row["metrics"]["age_s"]))
+        self.assertEqual(12.5, row["usage"]["cpu_pct"], "the last figures, marked old")
 
 
 def scene_objects():

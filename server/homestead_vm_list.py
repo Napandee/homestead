@@ -272,8 +272,7 @@ def list_vms():
     # Each running VM's use, and on every row the state of the CPU and memory
     # figures, so the page can say when they are old or missing (#928).
     try:
-        measured, note = VMUSAGE.usage()
-        metrics = VMUSAGE.metrics_state()
+        measured, note, metrics = VMUSAGE.measured()
     except Exception:
         measured, note, metrics = {}, "", None
     for row in rows:
