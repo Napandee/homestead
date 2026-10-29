@@ -443,11 +443,7 @@ def _for_role(request, answer):
     pages: every address without its credentials (a disk's source, a
     failed import's message in events, conditions or filling). The list is
     shared by every role, so it is copied first."""
-    if MASKS.sees_values(request.role):
-        return answer
-    answer = copy.deepcopy(answer)
-    MASKS.strip_in_place(answer)
-    return answer
+    return MASKS.for_role(request.role, answer)
 
 
 # Its routes and who may use them (homestead_routes.py).

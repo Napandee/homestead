@@ -27,6 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import homestead_agent_tools as TOOLS
 import homestead_helm as HELM
+import homestead_imports as IMPORTS
 import homestead_joblogs as JOBLOGS
 import homestead_operations as OPS
 import homestead_overview_server as OVERVIEW
@@ -433,9 +434,10 @@ class ReviewStrip(unittest.TestCase):
     def test_more_forms_of_credentials_in_addresses(self):
         strip = MASKS.strip_url_secrets
         cases = {
-            # An address inside another's query, as written and encoded.
+            # An address inside another's query, as written and encoded,
+            # is hidden whole.
             "https://proxy.example.com/?next=https://u:pw@b.example.com/":
-                "https://proxy.example.com/?next=https://•••@b.example.com/",
+                "https://proxy.example.com/?next=•••",
             "https://proxy.example.com/?next=https%3A%2F%2Fu%3Apw%40b.example.com%2F":
                 "https://proxy.example.com/?next=•••",
             # A token in the fragment (OAuth's implicit flow).
@@ -460,6 +462,52 @@ class ReviewStrip(unittest.TestCase):
             self.assertEqual(wanted, strip(given), given)
             self.assertEqual(wanted, strip(strip(given)), given)
             self.assertTrue(MASKS.has_stripped(strip(given)), given)
+
+    def test_an_address_anywhere_in_a_query_or_fragment_is_hidden(self):
+        strip = MASKS.strip_url_secrets
+        for given in ("https://h/?https://u:p@h2", "https://h/#https://u:p@h2", "https://h/?a=1&https://u:p@h2",
+                      "https://h/?https://u:p@h2=", "https://h/#x=1&https://u:p@h2", "https://h/?a=1;https://u:p@h2"):
+            with self.subTest(given=given):
+                once = strip(given)
+                self.assertNotIn("u:p", once)
+                self.assertEqual(once, strip(once))
+                self.assertTrue(MASKS.has_stripped(once))
+        self.assertEqual("https://h/?a=1&•••", strip("https://h/?a=1&https://u:p@h2"))
+
+    def test_names_and_values_are_read_decoded_and_whatever_they_hold(self):
+        strip = MASKS.strip_url_secrets
+        odd = "a/b/" + "c" * 500 + "_token"
+        cases = {
+            # A percent-encoded name, and a value that decodes to a credential's name or an address.
+            "https://h.example.com/?tok%65n=abc&page=2": "https://h.example.com/?tok%65n=•••&page=2",
+            "https://h.example.com/?q=%70assword%3Dhunter2": "https://h.example.com/?q=•••",
+            "https://h.example.com/?next=https%253A%252F%252Fu%253Ap%2540h": "https://h.example.com/?next=•••",
+            # A long name holding "/".
+            f"https://h.example.com/?{odd}=abc&x=1": f"https://h.example.com/?{odd}=•••&x=1",
+            # Closing marks after an address: whatever is left, no secret.
+            "x(https://h.example.com/?token=abc)]}": "x(https://h.example.com/?token=•••}",
+            # An address inside a path is checked once more; deeper is hidden whole.
+            "https://h.example.com/r/https://u:p@b.example.com/x": "https://h.example.com/r/https://•••@b.example.com/x",
+            "https://h.example.com/https://h.example.com/https://u:p@b.example.com": "https://h.example.com/https://•••",
+            # What does not parse cleanly is hidden whole.
+            "https://[::1/?token=abc": "https://•••",
+            "https://h.example.com:port/?token=abc": "https://•••",
+        }
+        for given, wanted in cases.items():
+            self.assertEqual(wanted, strip(given), given)
+            self.assertEqual(wanted, strip(strip(given)), given)
+            self.assertTrue(MASKS.has_stripped(strip(given)), given)
+
+    def test_a_text_too_long_to_check_is_hidden_whole(self):
+        text = "x" * (MASKS.MAX_TEXT + 1) + " https://u:hunter2@h.example.com/"
+        self.assertEqual(MASKS.TOO_LONG, MASKS.strip_url_secrets(text))
+        self.assertTrue(MASKS.has_stripped(MASKS.TOO_LONG))
+        long_plain = "x" * (MASKS.MAX_TEXT + 1)
+        self.assertEqual(long_plain, MASKS.strip_url_secrets(long_plain), "no address: nothing to hide")
+
+    def test_an_address_cut_short_after_its_password_is_hidden(self):
+        # Messages are shortened before they are shown: "...https://user:pass" with its "@host" cut off.
+        self.assertEqual("failed: https://•••", MASKS.strip_url_secrets("failed: https://user:hunter2"))
 
     def test_a_stripped_value_in_angle_brackets_is_still_known(self):
         self.assertTrue(MASKS.has_stripped(MASKS.strip_url_secrets("<https://h.example.com/?token=abc>")))
@@ -550,6 +598,31 @@ class ReviewLists(Base):
         self.assertIn("•••@", viewer["filling"][0]["message"])
         for text in (admin["events"][0]["message"], admin["conditions"][0]["message"], admin["filling"][0]["source"], admin["source"]):
             self.assertIn("hunter2", text)
+
+    def test_a_vm_disk_cannot_be_made_from_a_stripped_address(self):
+        import homestead_vm_edit as VM_EDIT
+        with mock.patch.object(VM_EDIT.V, "platform", return_value={"cdi": True}):
+            for url in ("https://•••@images.example.com/x.img", "https://images.example.com/x.img?token=•••"):
+                with self.subTest(url=url), self.assertRaisesRegex(ValueError, "hidden"):
+                    VM_EDIT._disk_volume({"spec": {"template": {"spec": {}}}}, "lab", "d", "10Gi", "", {"url": url}, [], [])
+
+    def test_vm_disk_and_image_lists_strip_addresses_for_a_viewer(self):
+        disks = [{"name": "disk", "message": "Unable to connect to https://u:hunter2@images.example.com/x.img"}]
+        images = [{"name": "img", "url": "https://u:hunter2@images.example.com/x.img?token=s3cr3t-t0ken"}]
+        for key in ("vmimg",):
+            ROUTER.forget(key)
+            self.addCleanup(ROUTER.forget, key)
+        with mock.patch.object(IMPORTS, "list_vm_disks", lambda: copy.deepcopy(disks)), \
+                mock.patch.object(IMPORTS, "list_vm_images", lambda: copy.deepcopy(images)):
+            for path in ("/api/vm-disks", "/api/vmimages"):
+                handler = IMPORTS.ROUTES[("GET", path)][1]
+                ask = lambda role: handler(ROUTER.Request("GET", path, {}, {}, "someone", role))
+                viewer, admin, again = ask("viewer"), ask("admin"), ask("viewer")
+                with self.subTest(path=path):
+                    self.assertHidden(viewer)
+                    self.assertHidden(again)
+                    self.assertIn("•••@images.example.com", repr(viewer))
+                    self.assertIn("hunter2", repr(admin))
 
     def test_the_vm_list_strips_addresses_for_a_viewer_without_touching_the_shared_copy(self):
         rows = [{"name": "vm", "namespace": "lab", "filling": [{"message": "copying https://u:hunter2@images.example.com/x"}]}]
