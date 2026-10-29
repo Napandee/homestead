@@ -666,7 +666,7 @@ function releasedBesideCurrent(p) {
       ["Claim UID", mono(pv.claim_uid), mono(now.claim_uid)],
       ["Longhorn volume", mono(pv.longhorn), mono(now.longhorn)],
       ["Used by", p.longhorn?.state === "detached" && !p.longhorn?.attached_node ? '<span class="dim">nothing: detached</span>' : `Longhorn: ${esc(p.longhorn?.state || "unknown")}`, users],
-    ]) + `<p class="dim xs">Only the Released volume is deleted, pinned by its name, UID and version. The volume the claim uses now is not the one deleted, and is never changed.</p>`);
+    ]) + UI.more("How the delete is pinned", "<p>Only the Released volume is deleted, pinned by its name, UID and version. The volume the claim uses now is not the one deleted, and is never changed.</p>"));
 }
 
 let volumeDeleteTarget = null, volumeDeleteRequest = 0;
@@ -709,7 +709,7 @@ window.volumeDelete = async x => {
     blocked
       ? UI.callout("bad", "Deletion is blocked.", `<ul class="ui-list">${p.blocking_reasons.map(r => `<li>${esc(r)}</li>`).join("")}</ul>${incomplete}`)
       : incomplete ? UI.callout("warn", "Impact check passed, with gaps.", incomplete)
-      : UI.callout("ok", "Impact check passed.", p.released ? `This Released volume is not the one the claim ${esc(p.name)} uses now. It is detached; deleting it permanently removes its remaining data, and the volume in use is not changed.`
+      : UI.callout("ok", "Impact check passed.", p.released ? `This Released volume is not the one the claim ${esc(p.name)} uses now. Deleting it removes its data; the volume in use is not changed.`
         : p.orphan ? "The PVC is already gone. This retained backing volume is detached; deleting it permanently removes its remaining data."
         : "This claim is detached and has no active app or VM references. Choose what should happen to its backing data."),
     p.released ? releasedBesideCurrent(p) : "",
