@@ -19,7 +19,6 @@ import json
 import sys
 import tempfile
 import unittest
-import urllib.error
 from pathlib import Path
 from unittest import mock
 
@@ -32,6 +31,7 @@ import homestead_operations as OPS
 import homestead_overview_server as OVERVIEW
 import homestead_resources as RES
 import homestead_routes as ROUTER
+import homestead_vms as VMS
 import homestead_value_masks as MASKS
 import homestead_workloads as WL
 import server  # noqa: F401  (binds the agent tools and the route table)
@@ -420,6 +420,103 @@ class JobLogs(unittest.TestCase):
 
     def test_other_jobs_output_is_unchanged_for_a_viewer(self):
         self.assertEqual(LOG_TEXT, self.log(self.plain, "viewer")["sources"][0]["text"])
+
+
+# Found by the review.
+RANCHER_POD = {"apiVersion": "v1", "kind": "Pod",
+               "metadata": {"name": "helm-operation-abcde", "namespace": "cattle-system", "uid": "p4"},
+               "spec": {"containers": [{"name": "helm"}]}, "status": {"phase": "Succeeded"}}
+
+
+class ReviewStrip(unittest.TestCase):
+    def test_more_forms_of_credentials_in_addresses(self):
+        strip = MASKS.strip_url_secrets
+        cases = {
+            # An address inside another's query, as written and encoded.
+            "https://proxy.example.com/?next=https://u:pw@b.example.com/":
+                "https://proxy.example.com/?next=https://•••@b.example.com/",
+            "https://proxy.example.com/?next=https%3A%2F%2Fu%3Apw%40b.example.com%2F":
+                "https://proxy.example.com/?next=•••",
+            # A token in the fragment (OAuth's implicit flow).
+            "https://app.example.com/cb#access_token=abc123&x=1": "https://app.example.com/cb#access_token=•••&x=1",
+            # Azure's ;Name=Value form, and other key names.
+            "Endpoint=sb://ns.example.com/;SharedAccessKeyName=r;SharedAccessKey=abc=":
+                "Endpoint=sb://ns.example.com/;SharedAccessKeyName=r;SharedAccessKey=•••",
+            "https://h.example.com/?accesskey=a&sharedkey=b&pw=c&page=2":
+                "https://h.example.com/?accesskey=•••&sharedkey=•••&pw=•••&page=2",
+            # A password with an unencoded "@": everything up to the last one.
+            "https://user:p@ss@host.example.com/x": "https://•••@host.example.com/x",
+            # Punctuation around an address stays.
+            "[https://h.example.com/?token=abc]": "[https://h.example.com/?token=•••]",
+            "see (https://h.example.com/?token=abc), then": "see (https://h.example.com/?token=•••), then",
+        }
+        for given, wanted in cases.items():
+            self.assertEqual(wanted, strip(given), given)
+            self.assertEqual(wanted, strip(strip(given)), given)
+            self.assertTrue(MASKS.has_stripped(strip(given)), given)
+
+    def test_a_stripped_value_in_angle_brackets_is_still_known(self):
+        self.assertTrue(MASKS.has_stripped(MASKS.strip_url_secrets("<https://h.example.com/?token=abc>")))
+        self.assertFalse(MASKS.has_stripped("https://h.example.com/?page=2 and •••"))
+
+
+class ReviewLogs(Logs):
+    def setUp(self):
+        super().setUp()
+        self.kube.add(copy.deepcopy(RANCHER_POD))
+
+    def test_names_that_could_step_out_of_the_pod_are_refused_for_everyone(self):
+        for role in ("viewer", "admin"):
+            for query in ({"ns": "kube-system/secrets?x=", "pod": "p", "container": "c"},
+                          {"ns": "kube-system", "pod": "helm-install-app-x1/../../secrets", "container": "helm"},
+                          {"ns": "kube-system", "pod": "p?x=", "container": "helm"},
+                          {"ns": "kube-system", "job": "helm-install-app&x=1"},
+                          {"ns": "lab", "pod": "web-1", "container": "web&previous=true"}):
+                with self.subTest(role=role, query=query):
+                    answer = self.logs(role, **query)
+                    self.assertEqual(400, answer.code)
+        self.assertEqual([], self.read)
+
+    def test_rancher_helm_operation_pods_need_the_reveal_role(self):
+        self.assertEqual(403, self.logs("viewer", ns="cattle-system", pod="helm-operation-abcde", container="helm").code)
+        self.assertEqual(200, self.logs("admin", ns="cattle-system", pod="helm-operation-abcde", container="helm").code)
+
+
+class ReviewLists(Base):
+    def test_the_helm_list_strips_a_pending_charts_address(self):
+        chart = {"metadata": {"name": "demo", "namespace": "kube-system"},
+                 "spec": {"chart": "oci://robot:hunter2@registry.example.com/charts/demo", "targetNamespace": "lab"}}
+        with mock.patch.object(HELM, "kget", return_value={"items": []}), \
+                mock.patch.object(HELM, "helmcharts", return_value=[chart]):
+            rows = HELM.releases()
+        self.assertEqual("oci://•••@registry.example.com/charts/demo", rows[0]["chart"])
+
+    def test_event_messages_lose_url_credentials_below_reveal(self):
+        event = {"apiVersion": "v1", "kind": "Event",
+                 "metadata": {"name": "disk.1", "namespace": "lab"},
+                 "involvedObject": {"name": "disk"}, "type": "Warning", "reason": "Failed",
+                 "message": "Unable to connect to https://u:hunter2@images.example.com/d.img?token=s3cr3t-t0ken",
+                 "lastTimestamp": "2026-10-28T00:00:00Z"}
+        with mock.patch.object(RES, "kget", lambda path: {"items": [copy.deepcopy(event)]}):
+            handler = RES.ROUTES[("GET", "/api/resources/events")][1]
+            ask = lambda role: handler(ROUTER.Request("GET", "/api/resources/events",
+                                                      {"ns": ["lab"], "name": ["disk"]}, {}, "someone", role))
+            viewer, admin = ask("viewer"), ask("admin")
+        self.assertEqual("Unable to connect to https://•••@images.example.com/d.img?token=•••", viewer[0]["message"])
+        self.assertIn("hunter2", admin[0]["message"])
+
+    def test_a_vms_page_strips_its_events_for_a_viewer(self):
+        vm = {"metadata": {"name": "vm", "namespace": "lab"}, "spec": {"template": {"spec": {}}}}
+        events = [{"type": "Warning", "reason": "Failed", "message": "import from https://u:hunter2@images.example.com/x"}]
+        with mock.patch.object(VMS, "_get", return_value=vm), mock.patch.object(VMS, "kget", return_value={}), \
+                mock.patch.object(VMS, "_row", side_effect=lambda *a, **k: {"disks": []}), mock.patch.object(VMS, "_claims", return_value={}), \
+                mock.patch.object(VMS, "_datavolumes", return_value={}), mock.patch.object(VMS, "_filling", return_value=[]), \
+                mock.patch.object(VMS, "events_for", lambda *a: copy.deepcopy(events)), \
+                mock.patch.object(VMS, "_read_cloud_init", return_value={}):
+            viewer = VMS.detail("lab", "vm", include_sensitive=False)
+            admin = VMS.detail("lab", "vm", include_sensitive=True)
+        self.assertEqual("import from https://•••@images.example.com/x", viewer["events"][0]["message"])
+        self.assertIn("hunter2", admin["events"][0]["message"])
 
 
 if __name__ == "__main__":

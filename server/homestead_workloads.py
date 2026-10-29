@@ -79,6 +79,11 @@ def _arg(request, key, default=""):
     return (request.query.get(key) or [default])[0]
 
 
+# A namespace, pod, job or container name as Kubernetes allows it (DNS
+# subdomain characters), so it cannot add a path or query to a request.
+LOG_NAME = re.compile(r"[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?")
+
+
 def logs_refusal(error, pod, container):
     """What Kubernetes' refusal to give logs means, in words rather than its JSON."""
     try:
@@ -101,13 +106,17 @@ def logs(request):
     ns = q["ns"][0]
     pod = _arg(request, "pod")
     job = _arg(request, "job")
+    container = _arg(request, "container")
+    # Each goes into an API path as it is: "kube-system/secrets?x=" as a
+    # namespace would read another list as Homestead.
+    if any(value and not LOG_NAME.fullmatch(value) for value in (ns, pod, job, container)) or not ns:
+        return ROUTER.Reply(400, {"error": "That is not a valid namespace, pod, job or container name."})
     if job and not pod:
         matches = kget(f"/api/v1/namespaces/{ns}/pods?labelSelector=job-name%3D{urllib.parse.quote(job)}").get("items", [])
         pod = matches[0]["metadata"]["name"] if matches else ""
     if not pod:
         return ROUTER.Reply(404, {"error": "Logs are not available yet because no pod exists."})
     tail = max(20, min(1000, int((q.get("tail") or [300])[0])))
-    container = _arg(request, "container")
     try:
         found = kget(f"/api/v1/namespaces/{ns}/pods/{pod}")
     except Exception:

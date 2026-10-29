@@ -31,6 +31,7 @@ import homestead_kube as KUBE
 import homestead_hvimage as HVIMAGE  # noqa: F401
 import homestead_lifecycle as LC
 import homestead_operations as OPS
+import homestead_value_masks as MASKS
 
 kget = ksend = None
 events_for = lambda ns, name, uid="": []
@@ -213,6 +214,9 @@ def detail(ns, name, include_sensitive=True):
                           "message": (c.get("message") or "")[:300]}
                          for c in ((vm.get("status") or {}).get("conditions") or []) + ((vmi.get("status") or {}).get("conditions") or [])]
     row["events"] = events_for(ns, name, "")[:30]
+    if not include_sensitive:
+        # A failed import's message can carry the image address with its login.
+        MASKS.strip_in_place(row["events"])
     claims = _claims(ns)
     for disk in row["disks"]:
         disk.update(_disk_source(vm, ns, disk["claim"], claims))

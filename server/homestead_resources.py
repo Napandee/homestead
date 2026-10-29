@@ -480,6 +480,16 @@ def events_for(namespace, name, uid=""):
     return sorted(rows, key=lambda r: r["last"] or "", reverse=True)[:100]
 
 
+def _events_route(request):
+    """An object's events; below reveal, an address in a message (a failed
+    download, say) loses its credentials."""
+    q = lambda key: (request.query.get(key) or [""])[0]
+    rows = events_for(q("ns"), q("name"), q("uid"))
+    if not MASKS.sees_values(request.role):
+        MASKS.strip_in_place(rows)
+    return rows
+
+
 def _parse(text):
     try:
         obj, _ = YAML.loads_untabbed(text)
@@ -588,5 +598,5 @@ ROUTES = {
     ("POST", "/api/resources/delete"): ("admin", lambda request: _delete(request.body)),
     ("POST", "/api/resources/create"): ("admin", lambda request: _create(request.body)),
     ("GET", "/api/resources/kinds"): ("viewer", lambda request: discover(force=(request.query.get("force") or [""])[0] == "1")),
-    ("GET", "/api/resources/events"): ("viewer", lambda request: events_for((request.query.get("ns") or [""])[0], (request.query.get("name") or [""])[0], (request.query.get("uid") or [""])[0])),
+    ("GET", "/api/resources/events"): ("viewer", lambda request: _events_route(request)),
 }

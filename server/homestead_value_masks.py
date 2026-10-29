@@ -11,22 +11,30 @@ can carry a credential outside a Secret.
 The role is the one GET /api/resources/reveal declares, read from the route
 table so the two cannot drift apart."""
 import re
+import urllib.parse
 
 HIDDEN = "•••"
 REVEAL = ("GET", "/api/resources/reveal")
 # An address with a scheme, up to whitespace or a quote.
 URL = re.compile(r"(?i)\b[a-z][a-z0-9+.-]*://[^\s\"'<>]*")
-USERINFO = re.compile(r"^([a-z][a-z0-9+.-]*://)[^/?#@]+@", re.I)
-PARAM = re.compile(r"([?&;])([^=&#;]+)=([^&#;]+)")
-# Names a credential goes by in a query: tokens, keys, passwords, signatures
-# (S3's X-Amz-Signature and X-Amz-Credential, Azure's sig), sessions.
-SECRET_PARAM = re.compile(r"pass|pwd|secret|token|sig|credential|auth|session|jwt|bearer|cookie|private|"
-                          r"^key$|[_-]key$|apikey|^code$", re.I)
-STRIPPED = re.compile(r"://" + HIDDEN + "@|[?&;][^=&#;\\s]+=" + HIDDEN + r"(?=$|[&#;\s\"'])")
+# The user and password: up to the last "@" before the path, as git and curl
+# read it, at every "://" (an address can sit inside another's query).
+USERINFO = re.compile(r"(?i)([a-z][a-z0-9+.-]*://)[^/?#\s]*@")
+# A query or fragment parameter, or Azure's ";Name=Value"; the value stops
+# before punctuation that closes the text around the address.
+PARAM = re.compile(r"([?&;#])([^=&#;?]+)=([^&#;)\]},]+)")
+# Names a credential goes by: tokens, keys, passwords, signatures (S3's
+# X-Amz-Signature and X-Amz-Credential, Azure's sig and SharedAccessKey),
+# sessions. Hiding a harmless one too is the safe side.
+SECRET_PARAM = re.compile(r"pass|^pw$|pwd|secret|token|sig|credential|auth|session|jwt|bearer|cookie|private|"
+                          r"key$|^code$", re.I)
+STRIPPED = re.compile(r"://" + HIDDEN + "@|[?&;#][^=&#;\\s]+=" + HIDDEN + r"(?=$|[^A-Za-z0-9%._~-])")
 # The k3s and RKE2 Helm controller: its Job's pods carry the chart's label,
-# and the Jobs are named for what they do.
+# and the Jobs are named for what they do. Rancher runs helm in
+# cattle-system's helm-operation-* pods.
 CHART_LABEL = "helmcharts.helm.cattle.io/chart"
 HELM_JOBS = ("helm-install-", "helm-delete-")
+RANCHER = ("cattle-system", "helm-operation-")
 
 
 def reveal_role():
@@ -39,9 +47,21 @@ def sees_values(role):
     return AUTH.allows(role, reveal_role())
 
 
+def _param(match):
+    sep, name, value = match.groups()
+    if SECRET_PARAM.search(name):
+        return f"{sep}{name}={HIDDEN}"
+    if "%" in value:
+        # An address passed on encoded (?next=https%3A%2F%2Fuser%3Apass%40...).
+        plain = urllib.parse.unquote(value)
+        if "://" in plain and strip_url_secrets(plain) != plain:
+            return f"{sep}{name}={HIDDEN}"
+    # An address passed on as written: its own query too.
+    return f"{sep}{name}={strip_url_secrets(value)}"
+
+
 def _strip_url(match):
-    url = USERINFO.sub(lambda m: m.group(1) + HIDDEN + "@", match.group(0))
-    return PARAM.sub(lambda m: f"{m.group(1)}{m.group(2)}={HIDDEN}" if SECRET_PARAM.search(m.group(2)) else m.group(0), url)
+    return PARAM.sub(_param, USERINFO.sub(lambda m: m.group(1) + HIDDEN + "@", match.group(0)))
 
 
 def strip_url_secrets(text):
@@ -77,9 +97,10 @@ def has_stripped(value):
 
 
 def helm_job_pod(pod):
-    """Whether a pod is one the Helm controller runs `helm` in."""
+    """Whether a pod is one the Helm controller (or Rancher) runs `helm` in."""
     meta = (pod or {}).get("metadata") or {}
     return (CHART_LABEL in (meta.get("labels") or {})
+            or (meta.get("namespace") == RANCHER[0] and str(meta.get("name", "")).startswith(RANCHER[1]))
             or any(str(o.get("apiVersion", "")).startswith("helm.cattle.io/")
                    or (o.get("kind") == "Job" and str(o.get("name", "")).startswith(HELM_JOBS))
                    for o in meta.get("ownerReferences") or []))
