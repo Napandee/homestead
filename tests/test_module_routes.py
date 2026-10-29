@@ -229,6 +229,16 @@ class CookieOwnersInSource(unittest.TestCase):
                    if path.stem != "homestead_routes" and "cookie_header" in cookie_calls(path)]
         self.assertEqual([], writers, "a module returns a Reply with cookies=(Cookie(...),); answer() checks its owner")
 
+    def test_the_data_move_cookie_is_named_once(self):
+        """Its name is written only in homestead_self_data_cookie; the route that
+        sets it, the status server that reads it and the route table take it from there."""
+        import homestead_self_data_cookie as MOVE
+        holders = sorted(p.stem for p in [*SS.server_modules(), SS.SERVER_PY]
+                         if p.stem != "homestead_self_data_cookie" and MOVE.NAME in p.read_text(encoding="utf-8"))
+        self.assertEqual([], holders, "take the cookie's name from homestead_self_data_cookie")
+        self.assertEqual(MOVE.PATH, ROUTES.COOKIES[MOVE.NAME])
+        self.assertEqual("homestead_self_data_server", ROUTES.owners()[MOVE.NAME])
+
     def test_the_scan_sees_each_written_form(self):
         for source, found in (("Cookie(A, b)", ["Cookie"]), ("ROUTES.Cookie(A, b)", ["Cookie"]),
                               ("X.cookie_header(c, tls)", ["cookie_header"]), ("SimpleCookie()", []),

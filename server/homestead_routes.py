@@ -57,6 +57,7 @@ import urllib.parse
 import homestead_agent_audit as AUDIT
 import homestead_cache as CACHE
 import homestead_http as HTTP
+import homestead_self_data_cookie as MOVE_COOKIE
 
 MODULES = (
     "homestead_addons",
@@ -211,7 +212,7 @@ Reply = collections.namedtuple("Reply", "code body ctype headers cookies", defau
 Cookie = collections.namedtuple("Cookie", "name value path max_age", defaults=("/", None))
 # The only cookies a route may read or set, each with the one path it is set at.
 # Each is set by one module only, the one whose OWN_COOKIES names it (#936).
-COOKIES ={"homestead_session": "/", "homestead_cluster": "/", "homestead-data-move": "/api/self/data/handoff/"}
+COOKIES ={"homestead_session": "/", "homestead_cluster": "/", MOVE_COOKIE.NAME: MOVE_COOKIE.PATH}
 # The only response headers a route may set: everything else (framing,
 # encoding, caching, security, cross-origin, cookies) is the server's own.
 ROUTE_HEADERS = ("location", "content-disposition", "retry-after", "etag", "last-modified", "vary",
