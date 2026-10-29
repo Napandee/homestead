@@ -214,9 +214,6 @@ def detail(ns, name, include_sensitive=True):
                           "message": (c.get("message") or "")[:300]}
                          for c in ((vm.get("status") or {}).get("conditions") or []) + ((vmi.get("status") or {}).get("conditions") or [])]
     row["events"] = events_for(ns, name, "")[:30]
-    if not include_sensitive:
-        # A failed import's message can carry the image address with its login.
-        MASKS.strip_in_place(row["events"])
     claims = _claims(ns)
     for disk in row["disks"]:
         disk.update(_disk_source(vm, ns, disk["claim"], claims))
@@ -441,14 +438,28 @@ def _migrate_route(request):
     return result
 
 
+def _for_role(request, answer):
+    """What a role below the one that may reveal a Secret sees of the VM
+    pages: every address without its credentials (a disk's source, a
+    failed import's message in events, conditions or filling). The list is
+    shared by every role, so it is copied first."""
+    if MASKS.sees_values(request.role):
+        return answer
+    answer = copy.deepcopy(answer)
+    MASKS.strip_in_place(answer)
+    return answer
+
+
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
     ("POST", "/api/vm/delete"): ("admin", _delete_route),
     ("POST", "/api/vm/migrate"): ("operator", _migrate_route),
     ("POST", "/api/vms/logo"): ("operator", lambda request: set_logos(request.body)),
     ("POST", "/api/vms/monitoring"): ("operator", lambda request: set_monitoring(request.body)),
-    ("GET", "/api/vms"): ("viewer", lambda request: homestead_routes.cached("vms", homestead_routes.PAGE_SECONDS, list_vms)),
-    ("GET", "/api/vm"): ("viewer", lambda request: detail((request.query.get("ns") or [""])[0], (request.query.get("name") or [""])[0], include_sensitive=request.role == "admin")),
+    ("GET", "/api/vms"): ("viewer", lambda request: _for_role(request, homestead_routes.cached(
+        "vms", homestead_routes.PAGE_SECONDS, list_vms))),
+    ("GET", "/api/vm"): ("viewer", lambda request: _for_role(request, detail(
+        (request.query.get("ns") or [""])[0], (request.query.get("name") or [""])[0], include_sensitive=request.role == "admin"))),
 }
 
 

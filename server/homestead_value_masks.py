@@ -15,20 +15,29 @@ import urllib.parse
 
 HIDDEN = "•••"
 REVEAL = ("GET", "/api/resources/reveal")
-# An address with a scheme, up to whitespace or a quote.
-URL = re.compile(r"(?i)\b[a-z][a-z0-9+.-]*://[^\s\"'<>]*")
-# The user and password: up to the last "@" before the path, as git and curl
-# read it, at every "://" (an address can sit inside another's query).
-USERINFO = re.compile(r"(?i)([a-z][a-z0-9+.-]*://)[^/?#\s]*@")
-# A query or fragment parameter, or Azure's ";Name=Value"; the value stops
-# before punctuation that closes the text around the address.
-PARAM = re.compile(r"([?&;#])([^=&#;?]+)=([^&#;)\]},]+)")
+# The text is written by anyone who can set an annotation or cause an event,
+# so every pattern here is bounded or scans forward once: the whole strip is
+# linear in the text's length.
+# A scheme ("https://"): at most 32 characters, so each position is tried in
+# bounded time.
+SCHEME = re.compile(r"(?i)[a-z][a-z0-9+.-]{0,31}://")
+# Where an address ends: whitespace, a quote or an angle bracket. One closing
+# mark right at its end (")", "]", "}" or ",") belongs to the text around it.
+ADDRESS_END = re.compile(r"[\s\"'<>]")
+CLOSERS = ")]},"
+# Where the user and password end: the host's path, query or fragment.
+HOST_END = re.compile(r"[/?#\s]")
+# A query or fragment parameter's name, or Azure's ";Name=": a value runs
+# from it to the next separator or the end of the address.
+PARAM = re.compile(r"([?&;#])([^=&#;?/\s\"'<>]{1,200})=")
+VALUE_END = re.compile(r"[&#;\s\"'<>]")
 # Names a credential goes by: tokens, keys, passwords, signatures (S3's
 # X-Amz-Signature and X-Amz-Credential, Azure's sig and SharedAccessKey),
 # sessions. Hiding a harmless one too is the safe side.
 SECRET_PARAM = re.compile(r"pass|^pw$|pwd|secret|token|sig|credential|auth|session|jwt|bearer|cookie|private|"
                           r"key$|^code$", re.I)
-STRIPPED = re.compile(r"://" + HIDDEN + "@|[?&;#][^=&#;\\s]+=" + HIDDEN + r"(?=$|[^A-Za-z0-9%._~-])")
+ENCODED_SCHEME = re.compile(r"(?i)%3a%2f%2f")
+STRIPPED = re.compile(r"://" + HIDDEN + "@|[?&;#][^=&#;?/\\s\"'<>]{1,200}=" + HIDDEN + r"(?=$|[&#;\s\"'<>)\]},])")
 # The k3s and RKE2 Helm controller: its Job's pods carry the chart's label,
 # and the Jobs are named for what they do. Rancher runs helm in
 # cattle-system's helm-operation-* pods.
@@ -47,27 +56,77 @@ def sees_values(role):
     return AUTH.allows(role, reveal_role())
 
 
-def _param(match):
-    sep, name, value = match.groups()
-    if SECRET_PARAM.search(name):
-        return f"{sep}{name}={HIDDEN}"
-    if "%" in value:
-        # An address passed on encoded (?next=https%3A%2F%2Fuser%3Apass%40...).
-        plain = urllib.parse.unquote(value)
-        if "://" in plain and strip_url_secrets(plain) != plain:
-            return f"{sep}{name}={HIDDEN}"
-    # An address passed on as written: its own query too.
-    return f"{sep}{name}={strip_url_secrets(value)}"
+def _end(pattern, text, start):
+    found = pattern.search(text, start)
+    return found.start() if found else len(text)
 
 
-def _strip_url(match):
-    return PARAM.sub(_param, USERINFO.sub(lambda m: m.group(1) + HIDDEN + "@", match.group(0)))
+def _userinfo(address):
+    """Each user and password in an address, anchored at each scheme in it
+    (one can sit inside another's query), up to the last "@" before the
+    host's path, as git and curl read it."""
+    out, pos = [], 0
+    for scheme in SCHEME.finditer(address):
+        start = scheme.end()
+        if start < pos:
+            continue
+        at = address.rfind("@", start, _end(HOST_END, address, start))
+        if at >= 0:
+            out += [address[pos:start], HIDDEN]
+            pos = at
+    return "".join(out) + address[pos:]
+
+
+def _params(address, decode):
+    """Credential-like parameter values, each masked to its separator or the
+    end of the address, whatever it holds. A value that is an address passed
+    on encoded (?next=https%3A%2F%2Fuser%3Apass%40...) and carries a
+    credential is masked whole (decoded once, never again inside it)."""
+    out, pos, start = [], 0, 0
+    # One stretch between separators at a time: a value (and any parameter
+    # written inside it, ?next=https://host/?token=...) ends at its end.
+    while start < len(address):
+        end = _end(VALUE_END, address, start + 1)
+        first = None
+        for param in PARAM.finditer(address, start, end):
+            first = first or param
+            if param.end() < end and SECRET_PARAM.search(param.group(2)):
+                out += [address[pos:param.end()], HIDDEN]
+                pos = end
+                break
+        else:
+            value = address[first.end():end] if first else ""
+            if decode and value and ENCODED_SCHEME.search(value) and _secret_inside(value):
+                out += [address[pos:first.end()], HIDDEN]
+                pos = end
+        start = end
+    return "".join(out) + address[pos:]
+
+
+def _secret_inside(value):
+    plain = urllib.parse.unquote(value)
+    return _strip(plain, decode=False) != plain
+
+
+def _strip(text, decode):
+    out, pos = [], 0
+    for scheme in SCHEME.finditer(text):
+        if scheme.start() < pos:
+            continue            # inside an address already done
+        end = _end(ADDRESS_END, text, scheme.end())
+        if end > scheme.end() and text[end - 1] in CLOSERS:
+            end -= 1
+        address = text[scheme.start():end]
+        out += [text[pos:scheme.start()], _params(_userinfo(address), decode)]
+        pos = end
+    return "".join(out) + text[pos:]
 
 
 def strip_url_secrets(text):
     """text with each address's user, password and credential-like query
-    values replaced by HIDDEN. Stripping twice changes nothing."""
-    return URL.sub(_strip_url, text) if isinstance(text, str) and "://" in text else text
+    values replaced by HIDDEN. Stripping twice changes nothing; the time it
+    takes is linear in the text's length."""
+    return _strip(text, decode=True) if isinstance(text, str) and "://" in text else text
 
 
 def strip_in_place(node, at=""):

@@ -18,6 +18,7 @@ import io
 import json
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -448,7 +449,12 @@ class ReviewStrip(unittest.TestCase):
             "https://user:p@ss@host.example.com/x": "https://•••@host.example.com/x",
             # Punctuation around an address stays.
             "[https://h.example.com/?token=abc]": "[https://h.example.com/?token=•••]",
-            "see (https://h.example.com/?token=abc), then": "see (https://h.example.com/?token=•••), then",
+            # One closing mark at the very end is not the address; a value
+            # runs to its real end, so a secret holding ")" is all hidden.
+            "see (https://h.example.com/?token=abc) then": "see (https://h.example.com/?token=•••) then",
+            "see (https://h.example.com/?token=abc), then": "see (https://h.example.com/?token=•••, then",
+            "https://h.example.com/?token=ab)c]d}e&x=1": "https://h.example.com/?token=•••&x=1",
+            "https://h.example.com/?token=ab)": "https://h.example.com/?token=•••)",
         }
         for given, wanted in cases.items():
             self.assertEqual(wanted, strip(given), given)
@@ -458,6 +464,20 @@ class ReviewStrip(unittest.TestCase):
     def test_a_stripped_value_in_angle_brackets_is_still_known(self):
         self.assertTrue(MASKS.has_stripped(MASKS.strip_url_secrets("<https://h.example.com/?token=abc>")))
         self.assertFalse(MASKS.has_stripped("https://h.example.com/?page=2 and •••"))
+
+    def test_adversarial_text_is_handled_in_linear_time(self):
+        # Anyone who can write an annotation or an event message writes this text.
+        n = 200_000
+        texts = ["a" * n + "://", "x://" * (n // 4), "https://h/" + "?a" * (n // 2), "https://" + "@" * n,
+                 "https://u:p@" * (n // 12), "https://h/?" + "a=" * (n // 2), "https://h/?next=" + "%3A%2F%2F" * (n // 9),
+                 "https://h/?token=" + ")" * n, ("https://h/?a=https://h/?b=" * (n // 26)), "?" + "a" * n + "=•••",
+                 "?a" * (n // 2) + "=•••", "https://" + "a:" * (n // 2)]
+        for text in texts:
+            started = time.monotonic()
+            stripped = MASKS.strip_url_secrets(text)
+            MASKS.has_stripped(stripped)
+            MASKS.has_stripped(text)
+            self.assertLess(time.monotonic() - started, 1.5, text[:40])
 
 
 class ReviewLogs(Logs):
@@ -505,18 +525,43 @@ class ReviewLists(Base):
         self.assertEqual("Unable to connect to https://•••@images.example.com/d.img?token=•••", viewer[0]["message"])
         self.assertIn("hunter2", admin[0]["message"])
 
-    def test_a_vms_page_strips_its_events_for_a_viewer(self):
-        vm = {"metadata": {"name": "vm", "namespace": "lab"}, "spec": {"template": {"spec": {}}}}
-        events = [{"type": "Warning", "reason": "Failed", "message": "import from https://u:hunter2@images.example.com/x"}]
+    def vm_route(self, path, role, query=None):
+        handler = VMS.ROUTES[("GET", path)][1]
+        return handler(ROUTER.Request("GET", path, {k: [v] for k, v in (query or {}).items()}, {}, "someone", role))
+
+    def test_a_vms_page_strips_every_address_for_a_viewer(self):
+        address = "https://u:hunter2@images.example.com/x?token=s3cr3t-t0ken"
+        vm = {"metadata": {"name": "vm", "namespace": "lab"}, "spec": {"template": {"spec": {}}},
+              "status": {"conditions": [{"type": "Failure", "status": "True", "message": f"import from {address}"}]}}
+        events = [{"type": "Warning", "reason": "Failed", "message": f"import from {address}"}]
+        filling = [{"disk": "root", "message": f"copying {address}", "source": address}]
         with mock.patch.object(VMS, "_get", return_value=vm), mock.patch.object(VMS, "kget", return_value={}), \
-                mock.patch.object(VMS, "_row", side_effect=lambda *a, **k: {"disks": []}), mock.patch.object(VMS, "_claims", return_value={}), \
-                mock.patch.object(VMS, "_datavolumes", return_value={}), mock.patch.object(VMS, "_filling", return_value=[]), \
+                mock.patch.object(VMS, "_row", side_effect=lambda *a, **k: {"disks": [], "source": address}), \
+                mock.patch.object(VMS, "_claims", return_value={}), \
+                mock.patch.object(VMS, "_datavolumes", return_value={}), \
+                mock.patch.object(VMS, "_filling", side_effect=lambda *a, **k: copy.deepcopy(filling)), \
                 mock.patch.object(VMS, "events_for", lambda *a: copy.deepcopy(events)), \
                 mock.patch.object(VMS, "_read_cloud_init", return_value={}):
-            viewer = VMS.detail("lab", "vm", include_sensitive=False)
-            admin = VMS.detail("lab", "vm", include_sensitive=True)
-        self.assertEqual("import from https://•••@images.example.com/x", viewer["events"][0]["message"])
-        self.assertIn("hunter2", admin["events"][0]["message"])
+            viewer = self.vm_route("/api/vm", "viewer", {"ns": "lab", "name": "vm"})
+            admin = self.vm_route("/api/vm", "admin", {"ns": "lab", "name": "vm"})
+        self.assertHidden(viewer)
+        self.assertEqual("import from https://•••@images.example.com/x?token=•••", viewer["events"][0]["message"])
+        self.assertIn("•••@", viewer["conditions"][0]["message"])
+        self.assertIn("•••@", viewer["filling"][0]["message"])
+        for text in (admin["events"][0]["message"], admin["conditions"][0]["message"], admin["filling"][0]["source"], admin["source"]):
+            self.assertIn("hunter2", text)
+
+    def test_the_vm_list_strips_addresses_for_a_viewer_without_touching_the_shared_copy(self):
+        rows = [{"name": "vm", "namespace": "lab", "filling": [{"message": "copying https://u:hunter2@images.example.com/x"}]}]
+        ROUTER.forget("vms")
+        self.addCleanup(ROUTER.forget, "vms")
+        with mock.patch.object(VMS, "list_vms", lambda: copy.deepcopy(rows)):
+            viewer = self.vm_route("/api/vms", "viewer")
+            admin = self.vm_route("/api/vms", "admin")
+            again = self.vm_route("/api/vms", "viewer")
+        self.assertHidden(viewer)
+        self.assertHidden(again)
+        self.assertIn("hunter2", repr(admin))
 
 
 if __name__ == "__main__":
