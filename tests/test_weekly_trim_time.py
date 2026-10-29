@@ -66,6 +66,33 @@ class SlotTests(StateCase):
         self.assertEqual("0 0 * * 0", WT.cron({"weekday": 6, "hour": 0}))
 
 
+class OnceAWeekTests(StateCase):
+    """The trim runs once a Monday-to-Sunday week (UTC), whatever the slot (#927 follow-up)."""
+    SUN = SAT + 86400                                           # Sunday 04:00, the same week
+
+    def test_moved_later_in_the_same_week_it_does_not_run_a_second_time(self):
+        state = {"weekday": 6, "hour": 4, "last": {"slot": SAT}}
+        self.assertFalse(WT.due(state, self.SUN + 60), "Saturday's run already counts for this week")
+        self.assertTrue(WT.due(state, self.SUN + 7 * 86400 + 60), "next week's Sunday runs")
+
+    def test_moved_earlier_it_runs_at_the_next_slot(self):
+        state = {"weekday": 2, "hour": 22, "last": {"slot": SAT}}
+        self.assertFalse(WT.due(state, WED + 7 * 86400 - 60), "not before the slot")
+        self.assertTrue(WT.due(state, WED + 7 * 86400 + 60), "the next week's Wednesday, four days after")
+
+    def test_the_first_run_ever_runs(self):
+        self.assertTrue(WT.due({"weekday": 6, "hour": 4}, self.SUN + 60))
+        self.assertTrue(WT.due({"weekday": 6, "hour": 4, "last": {}}, self.SUN + 60))
+
+    def test_after_a_long_gap_it_runs(self):
+        state = {"weekday": 6, "hour": 4, "last": {"slot": SAT - 6 * 7 * 86400}}
+        self.assertTrue(WT.due(state, self.SUN + 60))
+
+    def test_a_run_now_does_not_use_up_the_coming_slot(self):
+        """Run now records the slot before it, which is last week's."""
+        self.assertTrue(WT.due({"last": {"slot": SAT - 7 * 86400}}, SAT + 60))
+
+
 class SettingsTests(StateCase):
     def test_moving_the_trim_saves_the_slot_and_does_not_run_a_passed_one_at_once(self):
         self.save({"retired": True, "enabled": True, "last": {"slot": SAT - 7 * 86400}})

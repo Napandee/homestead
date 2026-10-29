@@ -68,13 +68,24 @@ def last_slot(now, weekday=SLOT_WEEKDAY, hour=SLOT_HOUR):
     return slot if slot <= now else slot - WEEK
 
 
+def _week(moment):
+    """The Monday-to-Sunday week (UTC) a moment falls in, counted from 1970."""
+    return (int(moment) // 86400 + 3) // 7
+
+
 def due(state, now):
     """Switched on and not yet run, nor tried, for this week's slot. A slot
-    missed while Homestead was down runs once, late."""
+    missed while Homestead was down runs once, late. At most one run a week:
+    when the last run's slot fell in the same Monday-to-Sunday week (UTC) as
+    this slot, the trim has had its week, so moving it to a later day does not
+    run it twice. Moving it earlier, or any gap of a week or more, still runs."""
     if state.get("enabled") is False:
         return False
     slot = last_slot(now, *slot_of(state))
-    return (state.get("last") or {}).get("slot") != slot and state.get("tried") != slot
+    ran = (state.get("last") or {}).get("slot")
+    if isinstance(ran, (int, float)) and _week(ran) == _week(slot):
+        return False
+    return state.get("tried") != slot
 
 
 def _claim(volume):
