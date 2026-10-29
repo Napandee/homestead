@@ -9,6 +9,7 @@ import math
 import time
 import urllib.error
 
+import homestead_kube as KUBE
 import homestead_operations as OPS
 import homestead_storage_guard as STORAGE_GUARD
 
@@ -452,12 +453,9 @@ def _released_identity(pv_name, namespace, name, volume):
     volume than the one reviewed, and is refused outright."""
     if not re.fullmatch(r"[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?", str(pv_name or "")):
         raise ValueError("the persistent volume name must be a valid Kubernetes name")
-    try:
-        pv = kget(f"/api/v1/persistentvolumes/{pv_name}")
-    except urllib.error.HTTPError as error:
-        if error.code == 404:
-            raise ValueError("That Released volume no longer exists; refresh the list") from None
-        raise
+    pv = KUBE.get_optional(f"/api/v1/persistentvolumes/{pv_name}", read=kget)
+    if pv is None:
+        raise ValueError("That Released volume no longer exists; refresh the list")
     spec = pv.get("spec") or {}
     csi, ref = spec.get("csi") or {}, spec.get("claimRef") or {}
     if csi.get("driver") != "driver.longhorn.io" or csi.get("volumeHandle") != volume:
@@ -476,11 +474,8 @@ def released_plan(namespace, name, volume, pv_name):
     _, volume = _identity(namespace, volume)
     pv = _released_identity(pv_name, namespace, name, volume)
     pm, ps, pstatus = pv.get("metadata") or {}, pv.get("spec") or {}, pv.get("status") or {}
-    try:
-        claim = kget(f"/api/v1/namespaces/{namespace}/persistentvolumeclaims/{name}")
-    except urllib.error.HTTPError as error:
-        if error.code != 404:
-            raise
+    claim = KUBE.get_optional(f"/api/v1/namespaces/{namespace}/persistentvolumeclaims/{name}", read=kget)
+    if claim is None:
         plan = orphan_plan(namespace, name, volume)
         if plan["pv"]["name"] != pv_name:
             raise ValueError("Another persistent volume holds that Longhorn volume; nothing will be deleted")
@@ -514,12 +509,9 @@ def released_plan(namespace, name, volume, pv_name):
     current["consumers"] = _consumers(namespace, name, warnings)
 
     path = f"/apis/longhorn.io/v1beta2/namespaces/{LONGHORN_NAMESPACE}"
-    try:
-        lh = kget(f"{path}/volumes/{volume}")
-    except urllib.error.HTTPError as error:
-        if error.code == 404:
-            raise ValueError("Longhorn no longer has that volume; refresh the list") from None
-        raise
+    lh = KUBE.get_optional(f"{path}/volumes/{volume}", read=kget)
+    if lh is None:
+        raise ValueError("Longhorn no longer has that volume; refresh the list")
     meta, spec, status = lh.get("metadata") or {}, lh.get("spec") or {}, lh.get("status") or {}
     ks = status.get("kubernetesStatus") or {}
     if ks.get("pvName") not in (None, "", pv_name):
