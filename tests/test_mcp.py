@@ -707,6 +707,110 @@ class CatalogueTests(unittest.TestCase):
                          and r.path not in used and r.path not in self.NOT_TOOLS)
         self.assertEqual([], missing, "make these agent tools, or say in NOT_TOOLS why they are not")
 
+    # Admin routes deliberately not tools, and why (#930 follow-up). Each path
+    # is named, so a new admin route still fails until someone decides.
+    ADMIN_UI_ONLY = {
+        **dict.fromkeys((
+            "/api/disks/add", "/api/disks/evict", "/api/disks/inspect", "/api/disks/name", "/api/disks/node-tags",
+            "/api/disks/os-space", "/api/disks/os-space/use", "/api/disks/remove", "/api/disks/retire",
+            "/api/disks/retire/plan", "/api/disks/scheduling", "/api/disks/setup", "/api/disks/tags",
+            "/api/disks/allocation/finish", "/api/disks/allocation/recheck", "/api/disks/allocation/review",
+            "/api/disks/allocation/start", "/api/disks/runtime/recheck", "/api/disks/runtime/retire",
+            "/api/disks/runtime/retirement-review", "/api/disks/runtime/review", "/api/disks/runtime/start",
+            "/api/disks/v2/plan", "/api/disks/v2/prepare", "/api/disks/v2/prepare-review", "/api/disks/v2/start",
+            "/api/node/bond", "/api/node/bond/inspect", "/api/node/bond/preview", "/api/node/bridge",
+            "/api/node/bridge/inspect", "/api/node/cordon", "/api/node/drain", "/api/node/hardware",
+            "/api/node/os/check", "/api/node/os/upgrade", "/api/node/power", "/api/node/probe/allocation",
+            "/api/node/probe/install", "/api/node/probe/remove", "/api/node/promote", "/api/node/smart/test",
+            "/api/passthrough/inspect", "/api/passthrough/iommu", "/api/passthrough/pci", "/api/passthrough/usb",
+            "/api/passthrough/vbios/capture", "/api/hardware/features", "/api/cluster/remove-node",
+            "/api/network/uplinks/apply", "/api/network/uplinks/preview", "/api/os-updates/check",
+            "/api/os-updates/settings", "/api/os-updates/start", "/api/os-updates/stop"),
+            "hosts, their disks, network links, OS and power are read-only to agents"),
+        "/api/host-console": "a host console is a person's, like the node shell",
+        **dict.fromkeys(("/api/helm/install", "/api/helm/uninstall", "/api/helm/upgrade"),
+                        "a Helm chart can create anything in the cluster; an agent's raw objects go through "
+                        "create_resources, which an admin approves"),
+        **dict.fromkeys(("/api/cluster/shutdown", "/api/cluster/shutdown/cancel", "/api/cluster/shutdown/recover",
+                         "/api/cluster/cleanup/run"), "shutting the cluster down or cleaning it up is a person's call"),
+        **dict.fromkeys((
+            "/api/addons/kube-vip", "/api/addons/kubevirt", "/api/addons/kubevirt/emulation", "/api/addons/longhorn",
+            "/api/addons/multus", "/api/addons/multus/repair", "/api/addons/nfs/remove", "/api/addons/smb/remove",
+            "/api/cluster/components/manage-operator", "/api/cluster/components/upgrade",
+            "/api/cluster/upgrades/start", "/api/platform/baseline/install", "/api/gitops/reconcile",
+            "/api/longhorn/settings", "/api/longhorn/offline-rebuilding", "/api/longhorn/v2/cleanup",
+            "/api/longhorn/v2/cleanup/recheck", "/api/longhorn/v2/enable", "/api/longhorn/v2/prepare",
+            "/api/longhorn/v2/upgrade/review", "/api/longhorn/v2/upgrade/settings", "/api/lh/target",
+            "/api/storage/classes", "/api/storage/classes/cleanup", "/api/storage/classes/default",
+            "/api/storage/classes/delete", "/api/volumes/repair-class", "/api/objectstore/deploy",
+            "/api/objectstore/longhorn", "/api/objectstore/remove", "/api/objectstore/transfers"),
+            "the cluster's own footing (add-ons, components, upgrades, storage setup) is set up by a person"),
+        **dict.fromkeys((
+            "/api/network/service/delete", "/api/network/vips/add", "/api/network/vips/change",
+            "/api/network/vips/default", "/api/network/vips/label", "/api/network/vips/remove",
+            "/api/network/vm-networks", "/api/firewall/delete", "/api/firewall/preview", "/api/firewall/save",
+            "/api/ipam/unifi"), "cluster addresses and the firewall: a slip cuts everyone off, so a person makes it"),
+        **dict.fromkeys((
+            "/api/move/clusters/add", "/api/move/clusters/check", "/api/move/clusters/readiness",
+            "/api/move/clusters/remove", "/api/move/clusters/storage", "/api/move/clusters/target",
+            "/api/move/clusters/transfers", "/api/move/moves/abandon", "/api/move/moves/dismiss",
+            "/api/move/moves/finish", "/api/move/moves/retry", "/api/move/plan", "/api/move/remote",
+            "/api/move/source", "/api/move/start"), "a move spans clusters and holds another cluster's credentials"),
+        **dict.fromkeys((
+            "/api/import", "/api/import/preview", "/api/imports/cleanup-plan", "/api/imports/delete",
+            "/api/sources", "/api/sources/browse", "/api/sources/containers", "/api/sources/delete",
+            "/api/sources/inspect", "/api/sources/measure", "/api/sources/scan", "/api/sources/trust",
+            "/api/sources/vms", "/api/sources/vms/shutdown", "/api/vms/import-unraid", "/api/vms/import-unraid/room",
+            "/api/vm-disks/import", "/api/volumes/chown", "/api/images/cleanup", "/api/images/forget-rollback",
+            "/api/images/scan", "/api/images/vm/delete"),
+            "importing reads another server's files with its credentials, which agents are never given"),
+        **dict.fromkeys(("/api/images/cleanup-unused", "/api/images/cleanup-unused/preview", "/api/vm/isos/delete",
+                         "/api/vm/isos/folders", "/api/vm/isos/keep", "/api/vm/store/auto", "/api/vm/store/forget",
+                         "/api/vm/store/keep", "/api/vm/store/refresh"),
+                        "image and ISO housekeeping on the hosts is a person's; delete_vm removes a VM"),
+        **dict.fromkeys(("/api/shares", "/api/shares/delete", "/api/shares/edit", "/api/shares/nfs",
+                         "/api/shares/repair", "/api/shares/users", "/api/shares/users/delete"),
+                        "file shares and their users hold passwords, which agents are never given"),
+        **dict.fromkeys(("/api/mqtt", "/api/mqtt/control", "/api/mqtt/test"), "the MQTT broker's credentials"),
+        **dict.fromkeys(("/api/snapshot-files/close", "/api/snapshot-files/restore",
+                         "/api/snapshot-files/restore/plan", "/api/snapshot-files/start"),
+                        "file-level restore opens a volume's files, which agents are never given"),
+        **dict.fromkeys(("/api/operations/power-recovery/preview", "/api/operations/power-recovery/resolve",
+                         "/api/operations/resume", "/api/operations/storage-recovery/act",
+                         "/api/operations/storage-recovery/preview", "/api/operations/vm-recovery/preview",
+                         "/api/operations/vm-recovery/resolve", "/api/statefulset/restart-elsewhere",
+                         "/api/restore-swap", "/api/volumes/previous/swap-back", "/api/restore-tests/run"),
+                        "recovery after a failure is a person's judgement; restore_backup restores a backup"),
+        **dict.fromkeys(("/api/image-updates/channel", "/api/restore-tests/settings", "/api/weekly-trim/settings",
+                         "/api/volumes/previous/settings", "/api/portal", "/api/homestead/data/tidy",
+                         "/api/setup/https-check", "/api/setup/opened", "/api/welcome/done"),
+                        "Homestead's own settings and setup guide, like /api/settings, are a person's"),
+    }
+
+    def test_every_admin_action_is_a_held_tool_or_kept_from_agents_on_purpose(self):
+        """A new admin route fails this until a tool reaches it (held for an
+        admin's approval, below), or it is listed above with the reason it is not."""
+        used = {path for _, path in self.routes()}
+        admin = sorted(r.path for r in ROUTER.table().values() if r.method != "GET" and r.role == "admin")
+        missing = [p for p in admin if p not in used and p not in self.ADMIN_UI_ONLY
+                   and not any(p == n or p.startswith(n + "/") for n in self.NEVER)]
+        self.assertEqual([], missing, "make these agent tools held for approval, or say in ADMIN_UI_ONLY why they are not")
+        self.assertEqual([], sorted(p for p in self.ADMIN_UI_ONLY if p in used), "a tool reaches these: drop them from ADMIN_UI_ONLY")
+        self.assertEqual([], sorted(p for p in self.ADMIN_UI_ONLY if p not in admin), "not an admin route that changes something")
+
+    def test_an_agent_reaching_an_admin_route_waits_for_an_admin(self):
+        """An agent's key is at most operator, so every admin route a tool
+        names becomes a request for an admin before anything runs."""
+        reached = [("POST", p) for _, p in self.routes() if ROUTE_POLICY.role(p, "POST") == "admin"]
+        self.assertTrue(reached)
+        ran = lambda m, p, b: self.fail(f"{m} {p} ran without an approval")  # noqa: E731
+        with mock.patch.dict(TOOLS._bound, role_of=ROUTE_POLICY.role, precheck=ran):
+            for method, path in reached:
+                for role in ("viewer", "operator"):
+                    with self.assertRaises(TOOLS.NeedsApproval, msg=f"{method} {path} as {role}") as held:
+                        TOOLS.call(method, path, {}, {}, user="api-key:t", role=role)
+                    self.assertEqual("admin", held.exception.role)
+
     def test_admin_routes_are_reached_only_through_an_approval(self):
         destructive = {t.name for t in TOOLS.TOOLS if t.kind == TOOLS.DESTRUCTIVE}
         for tool in TOOLS.TOOLS:
