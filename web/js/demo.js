@@ -2600,7 +2600,7 @@ ssh_pwauth: true
           kept("pvc-demo-old-notes", "lab", "notes-data", 5, ["node-1"], { class: "longhorn", old_copy: true }),
           kept("pv-demo-nfs", "media", "archive", 100, [], { class: "nfs", driver: "nfs.csi.k8s.io", longhorn: "", allocated_bytes: 100 * GiB })] : [])
           // An app deployed again with its old claim name ("reused"): the old volume shows on its card.
-          .concat(ask.includes("reused") ? [kept("pvc-demo-frigate-before", "lab", "frigate-config", 10, ["harvester-node1", "harvester-node2"],
+          .concat(ask.includes("reused") ? [kept("pvc-demo-frigate-before", "lab", "frigate-config", 10, ["node-1", "node-2"],
             { class: "longhorn-r2", claim_reused: true })] : []) },
         iscsi: { state: "ok", hosts: ask.includes("iscsi") ? [{ node: "node-2", sessions: [
           { sid: 67, target: "iqn.2019-10.io.longhorn:pvc-demo-notes", volume: "pvc-demo-notes", namespace: "lab", claim: "notes-data",

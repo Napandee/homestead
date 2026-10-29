@@ -8,6 +8,7 @@ review now shows the Released volume beside the one the app uses now, and the
 delete changes only that PV, pinned by name, UID and version. The current
 claim, its volume and its Longhorn volume are never written."""
 import sys
+import urllib.error
 import tempfile
 import unittest
 from pathlib import Path
@@ -138,70 +139,121 @@ class ReusedClaimNameReview(Case):
 
 
 class TheCurrentVolumeIsNeverDeleted(Case):
-    def assertRefused(self, *changes, volume="pvc-old", pv_name="pvc-old"):
+    def assertRefused(self, *changes, why, volume="pvc-old", pv_name="pvc-old"):
+        """Refused for the reason named (a blocker in the review, or the review
+        itself refusing), and nothing written."""
         with cluster(*changes) as kube:
             bind()
             try:
                 p = VOLUMES.deletion_plan("lab", "notes-data", volume, pv_name)
                 self.assertTrue(p["blocked"], p)
                 self.assertFalse(p["actions"]["delete_data"]["enabled"])
-            except ValueError:
-                pass
+                self.assertTrue(any(why in reason for reason in p["blocking_reasons"]), p["blocking_reasons"])
+            except ValueError as error:
+                self.assertIn(why, str(error))
             with self.assertRaises((ValueError, PermissionError)):
                 VOLUMES.delete({**CFG, "volume": volume, "pv": pv_name, "confirmation": pv_name,
                                 "uid": "lh-" + volume, "pv_uid": "pv-new-uid" if pv_name == "pvc-new" else "pv-old-uid"})
             self.assertEqual([], kube.writes)
 
     def test_asking_for_the_pv_the_app_uses_now_is_refused(self):
-        self.assertRefused(volume="pvc-new", pv_name="pvc-new")
+        self.assertRefused(volume="pvc-new", pv_name="pvc-new", why="This is the volume the claim uses now")
 
     def test_a_pv_that_is_not_released_is_refused(self):
-        self.assertRefused(lambda o: o["old"]["status"].update(phase="Bound"))
+        self.assertRefused(lambda o: o["old"]["status"].update(phase="Bound"), why="not Released")
 
     def test_a_current_claim_bound_to_that_pv_is_refused(self):
-        self.assertRefused(lambda o: o.update(claim=claim("pvc-old")))
+        self.assertRefused(lambda o: o.update(claim=claim("pvc-old")), why="This is the volume the claim uses now")
 
     def test_a_current_claim_with_the_old_claim_uid_is_refused(self):
-        self.assertRefused(lambda o: o.update(claim=claim("pvc-new", uid="claim-old")))
+        self.assertRefused(lambda o: o.update(claim=claim("pvc-new", uid="claim-old")), why="claim reference is the current claim's")
 
     def test_a_current_claim_not_bound_yet_is_refused(self):
-        self.assertRefused(lambda o: o.update(claim=claim("", phase="Pending")))
+        self.assertRefused(lambda o: o.update(claim=claim("", phase="Pending")), why="not bound yet")
 
     def test_a_current_volume_on_the_same_longhorn_volume_is_refused(self):
-        self.assertRefused(lambda o: o["new"]["spec"]["csi"].update(volumeHandle="pvc-old"))
+        self.assertRefused(lambda o: o["new"]["spec"]["csi"].update(volumeHandle="pvc-old"), why="uses this Longhorn volume now")
 
     def test_a_current_volume_that_cannot_be_read_is_refused(self):
-        self.assertRefused(lambda o: o.update(new=None))
+        self.assertRefused(lambda o: o.update(new=None), why="Impact inventory is incomplete")
 
     def test_a_longhorn_volume_still_attached_is_refused(self):
-        self.assertRefused(lambda o: o["lh-old"]["status"].update(state="attached", currentNodeID="node-2"))
+        self.assertRefused(lambda o: o["lh-old"]["status"].update(state="attached", currentNodeID="node-2"), why="fully detached")
 
     def test_a_pv_of_another_claim_is_refused(self):
-        self.assertRefused(lambda o: o["old"]["spec"]["claimRef"].update(name="other"))
+        self.assertRefused(lambda o: o["old"]["spec"]["claimRef"].update(name="other"), why="was not that claim's")
 
     def test_a_pv_on_another_longhorn_volume_is_refused(self):
-        self.assertRefused(lambda o: o["old"]["spec"]["csi"].update(volumeHandle="pvc-other"))
+        self.assertRefused(lambda o: o["old"]["spec"]["csi"].update(volumeHandle="pvc-other"), why="not that Longhorn volume's")
 
     def test_a_longhorn_volume_last_bound_to_another_pv_is_refused(self):
-        self.assertRefused(lambda o: o["lh-old"]["status"]["kubernetesStatus"].update(pvName="pvc-new"))
+        self.assertRefused(lambda o: o["lh-old"]["status"]["kubernetesStatus"].update(pvName="pvc-new"), why="another persistent volume")
 
-    def test_the_current_pv_changing_under_the_delete_stops_the_write(self):
+    def test_a_longhorn_volume_last_bound_to_another_claim_is_refused(self):
+        self.assertRefused(lambda o: o["lh-old"]["status"]["kubernetesStatus"].update(pvcName="other"), why="another claim")
+
+    def test_a_longhorn_volume_that_is_gone_is_refused_plainly(self):
+        self.assertRefused(lambda o: o.update(**{"lh-old": None}), why="refresh the list")
+
+    def test_a_forged_plan_naming_the_current_pv_is_never_written(self):
+        """delete_orphan checks again, whatever the plan says."""
+        with cluster() as kube:
+            bind()
+            p = plan()
+            for forged in ({**p, "pv": {**p["pv"], "name": "pvc-new"}}, {**p, "pv": {**p["pv"], "uid": "pv-new-uid"}},
+                           {**p, "longhorn": {**p["longhorn"], "name": "pvc-new"}}, {**p, "pv": {**p["pv"], "claim_uid": ""}}):
+                with self.subTest(forged=forged["pv"]), self.assertRaises(PermissionError):
+                    VOLUMES.delete_orphan(forged, {**CFG, "pv_uid": forged["pv"]["uid"]})
+            self.assertEqual([], kube.writes)
+
+    def test_the_released_pv_changing_under_the_delete_stops_the_write(self):
         """The patch carries its own tests: the API server refuses it if the PV
         was replaced, rebound or changed after the review read it."""
         with cluster() as kube:
             bind()
             original = K.kget
 
-            def rebinding(path, *a, **k):
+            def changing(path, *a, **k):
                 found = original(path, *a, **k)
                 if path == "/api/v1/persistentvolumes/pvc-old":
                     kube.add({**pv("pvc-old", "pv-old-uid", "Released", "claim-old"),
                               "metadata": {"name": "pvc-old", "uid": "pv-old-uid", "resourceVersion": "8"}})
                 return found
-            VOLUMES.bind(rebinding, K.ksend, lambda _: [], lambda _: [], {}, {"kube-system"}, "lab")
-            with self.assertRaises(Exception):
+            VOLUMES.bind(changing, K.ksend, lambda _: [], lambda _: [], {}, {"kube-system"}, "lab")
+            with self.assertRaises(urllib.error.HTTPError) as refused:
                 VOLUMES.delete(CFG)
+            self.assertEqual(422, refused.exception.code)
+            self.assertEqual([("PATCH", "/api/v1/persistentvolumes/pvc-old")], [(m, p) for m, p, *_ in kube.writes])
             self.assertEqual("Retain", kube.object("/api/v1/persistentvolumes/pvc-old")["spec"]["persistentVolumeReclaimPolicy"])
+
+
+class TheJobIsTheReleasedVolumes(Case):
+    """The job recorded for the delete, and the storage guard, are the Released
+    PV's: the claim name is the volume in use's, and must not be fenced or named."""
+
+    def test_the_job_names_the_released_pv_and_does_not_hold_the_claim_in_use(self):
+        import homestead_storage_conflicts as CONFLICTS
+        with cluster():
+            bind()
+            VOLUMES.delete_reviewed(CFG)
+        job = OPS.stored()[-1]
+        self.assertEqual("Delete Released volume pvc-old", job["title"])
+        self.assertEqual(("PersistentVolume", "pvc-old"), (job["resource"]["kind"], job["resource"]["name"]))
+        targets = CONFLICTS.targets(job["kind"], job["ref"], job.get("resource"))
+        self.assertNotIn(("claim", "lab", "notes-data"), targets)
+        self.assertIn(("pv", "pvc-old"), targets)
+
+    def test_a_storage_move_of_the_claim_name_still_holds_the_released_volume_until_it_ends(self):
+        """Left conservative on purpose: the guard matches a PV by its live
+        claimRef, which a Released volume shares with the claim in use, so a
+        move of that claim holds the old volume's delete until the move ends."""
+        import homestead_storage_guard as GUARD
+        from fakes.job_store import Store
+        for ref in ({"namespace": "lab", "claim": "notes-data"}, {"namespace": "lab", "old_pv": "pvc-old"}):
+            move = {"id": "m1", "kind": "reclass", "status": "running", "ref": ref}
+            with self.subTest(ref=ref), cluster():
+                bind()
+                self.assertTrue(GUARD.review(plan(), Store(read=lambda: [move]), K.kget)["blocked"])
 
 
 class WithoutAReusedName(Case):

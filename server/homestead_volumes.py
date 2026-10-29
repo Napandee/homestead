@@ -514,11 +514,18 @@ def released_plan(namespace, name, volume, pv_name):
     current["consumers"] = _consumers(namespace, name, warnings)
 
     path = f"/apis/longhorn.io/v1beta2/namespaces/{LONGHORN_NAMESPACE}"
-    lh = kget(f"{path}/volumes/{volume}")
+    try:
+        lh = kget(f"{path}/volumes/{volume}")
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            raise ValueError("Longhorn no longer has that volume; refresh the list") from None
+        raise
     meta, spec, status = lh.get("metadata") or {}, lh.get("spec") or {}, lh.get("status") or {}
     ks = status.get("kubernetesStatus") or {}
     if ks.get("pvName") not in (None, "", pv_name):
         blockers.append("Longhorn last bound this volume to another persistent volume")
+    if ks.get("namespace") not in (None, "", namespace) or ks.get("pvcName") not in (None, "", name):
+        blockers.append("Longhorn last bound this volume to another claim")
     if status.get("state") != "detached" or status.get("currentNodeID") or spec.get("nodeID") or spec.get("migrationNodeID"):
         blockers.append("Longhorn must be fully detached with no requested attachment")
     pvs = [p for p in _items("/api/v1/persistentvolumes", "persistent volume", warnings)
@@ -594,7 +601,7 @@ def delete_orphan(plan, cfg):
         if key.startswith(("vol", "stor", "flow", "lhov")):
             cache.pop(key, None)
     return {"ok": True, "orphan": True, "namespace": plan["namespace"], "name": plan["name"],
-            "action": "delete_data", "pv": pv["name"], "longhorn_volume": plan["longhorn"]["name"],
+            "action": "delete_data", "pv": pv["name"], "longhorn_volume": plan["longhorn"]["name"], "released": bool(plan.get("released")),
             "message": "Retained backing-data deletion requested; external backups are kept"}
 
 
@@ -608,6 +615,16 @@ def delete_reviewed(cfg):
     storage job starts on the volume meanwhile."""
     with OPS.transaction():
         result = delete(cfg, validate=_review)
+        if result.get("released"):
+            # The claim name is the current volume's: the job is the PV's
+            # alone, so nothing fences or names the claim in use.
+            result["operation"] = OPS.start(
+                "volume-delete", f"Delete Released volume {result['pv']}",
+                {"kind": "PersistentVolume", "name": result["pv"]},
+                "/volumes", {"namespace": result["namespace"], "name": result["pv"], "claim": result["name"],
+                              "released": True, "action": result["action"], "pv": result["pv"], "orphan": True,
+                              "volume": result["longhorn_volume"]}, result["message"])
+            return result
         result["operation"] = OPS.start(
             "volume-delete", f"Delete volume {result['name']}",
             {"kind": "PersistentVolumeClaim", "name": result["name"],

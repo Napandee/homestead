@@ -165,3 +165,17 @@ test("a reused claim name the server refuses keeps the delete off", async () => 
   r.context.volumeDeleteGate();
   assert.equal(r.elements["#vd_go"].disabled, true);
 });
+
+test("a delete started from an app's old-volume row stays on the Containers page", async () => {
+  const shown = [];
+  const r = review(async (path, init) => init ? {message: "ok"} : releasedPlan());
+  Object.assign(r.context, {closeModal: () => {}, resetPaint: () => {}, STATE: {view: "workloads"},
+    viewWorkloads: () => shown.push("workloads"), viewStorage: () => shown.push("storage")});
+  vm.runInContext("var STATE = window.STATE;", r.context);
+  await r.context.volumeDelete(released);
+  r.confirm();
+  r.elements["#vd_confirm"].value = "pvc-old";
+  r.context.volumeDeleteGate();
+  await r.context.volumeDeleteNow("lab", "notes-data", "lh-uid");
+  assert.deepEqual(shown, ["workloads"]);
+});

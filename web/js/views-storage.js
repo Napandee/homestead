@@ -665,7 +665,7 @@ function releasedBesideCurrent(p) {
       ["Phase", esc(pv.phase || "?"), esc(now.phase || "?")],
       ["Claim UID", mono(pv.claim_uid), mono(now.claim_uid)],
       ["Longhorn volume", mono(pv.longhorn), mono(now.longhorn)],
-      ["Used by", p.blocked ? `Longhorn: ${esc(p.longhorn?.state || "unknown")}` : '<span class="dim">nothing: detached</span>', users],
+      ["Used by", p.longhorn?.state === "detached" && !p.longhorn?.attached_node ? '<span class="dim">nothing: detached</span>' : `Longhorn: ${esc(p.longhorn?.state || "unknown")}`, users],
     ]) + `<p class="dim xs">Only the Released volume is deleted, pinned by its name, UID and version. The volume the claim uses now is not the one deleted, and is never changed.</p>`);
 }
 
@@ -768,7 +768,8 @@ window.volumeDeleteNow = async (namespace, name, uid) => {
         volume: plan?.longhorn?.name || "", pv_uid: plan?.pv?.uid || "", pv: volumeDeleteTarget?.pv || "" }) });
     toast(result.message || `${name} deletion started`, "ok"); closeModal();
     if (window.noteOperation) noteOperation(result.operation);
-    resetPaint(); viewStorage();
+    // From an app's old-volume row (#932), stay on the Containers page.
+    resetPaint(); if (typeof STATE !== "undefined" && STATE.view === "workloads" && window.viewWorkloads) viewWorkloads(); else viewStorage();
   } catch (e) {
     button.disabled = false; volumeDeleteGate(); toast(e.message, "bad");
   }

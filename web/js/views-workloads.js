@@ -1043,7 +1043,7 @@ function workloadTableRows(rows) {
           <div class="wl-detail-access"><span>Access</span><b class="waccess">${accessPorts(w.ports)}</b></div>
           ${(w.claims || []).length && !remoteRow(w) ? `<div class="wl-detail-volumes"><span>Volumes</span><b class="row">${w.claims.map(claim =>
             `<button type="button" class="tag info linkish" title="Open ${esc(claim)} in Volumes" onclick="openWorkloadVolume(${jsq(claim)})">${esc(claim)}</button>`).join("")}</b></div>` : ""}
-          ${workloadReleasedRow(w) ? `<div class="wl-detail-released"><span>Old volumes</span>${workloadReleasedRow(w, true)}</div>` : ""}
+          ${(released => released ? `<div class="wl-detail-released"><span>Old volumes</span>${released}</div>` : "")(workloadReleasedRow(w, true))}
           ${gitopsDetail(w)}
           ${startsAfterFact(w)}
         </div>

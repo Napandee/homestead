@@ -75,10 +75,10 @@ function appReleasedRow(w, detail = false) {
     <button type="button" class="linkish" onclick="${run}"${n === 1 ? ' data-need="admin"' : ""}>${n === 1 ? "Review delete" : "Review"}</button></${detail ? "b" : "div"}>`;
 }
 
-function releasedVolumeDeleteFor(namespace, pv) {
+async function releasedVolumeDeleteFor(namespace, pv) {
   const v = releasedVolumesKnown.find(x => x.namespace === namespace && x.pv === pv);
   if (!v) return;
-  if (v.old_copy) return reclassRemoveOld(v.pv);
+  if (v.old_copy) { await reclassRemoveOld(v.pv); await releasedVolumesLoad(); if (typeof STATE !== "undefined" && STATE.view === "workloads" && window.renderWorkloads) renderWorkloads(); return; }
   return volumeDelete({ name: v.longhorn, pvc_name: v.claim, namespace: v.namespace, pv: v.pv });
 }
 
