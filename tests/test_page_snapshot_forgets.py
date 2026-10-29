@@ -202,6 +202,14 @@ class UntoldWritesTests(Forgets):
         self.follow()
         self.assertEqual(set(self.PAGES.PARTS), set(self.told()))
 
+    def test_a_cache_clear_drops_a_read_started_before_it(self):
+        # A leader cycle running during a config restore must not keep its
+        # part read before the restore.
+        epoch = CACHE.epoch("ov")
+        CACHE._cache.clear()
+        self.assertFalse(CACHE.keep("ov", "read before", epoch, at=time.time()))
+        self.assertGreater(CACHE.forgotten_at("ov"), 0)
+
     def test_a_bust_of_keys_never_read_here_is_told(self):
         self.assertNotIn("wl", CACHE._cache)
         CACHE.drop_where(CACHE._cache, lambda key: key.startswith(("wl", "ov", "helm")))
@@ -239,7 +247,7 @@ class UntoldWritesTests(Forgets):
     def test_no_write_walks_only_the_keys_held_here(self):
         # The storage, storage-class and settings busts sit inside their
         # writes; a loop over the cache's own keys misses those not held.
-        walk = re.compile(r"for \w+ in (?:list\()?(?:\w+\.)?_cache\b|in _cache if")
+        walk = re.compile(r"for \w+ in (?:\w+\()?(?:\w+\.)?_cache\b|in (?:\w+\.)?_cache(?:\.keys\(\))? if")
         found = [f"{path.name}:{number}" for path in sorted((Path(__file__).resolve().parents[1] / "server").glob("*.py"))
                  for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1) if walk.search(line)]
         self.assertEqual([], found)
@@ -274,10 +282,30 @@ class SharedFileTests(Forgets):
         CACHE.forget_where(lambda key: key == "wl")
         self.follow()
         when = self.told()["wl"]
-        SHARED.write_json(self.forgets_path(), {"forgets": {"wl": when - 5}})
+        SHARED.write_json(self.forgets_path(), {"forgets": {"wl": when - self.PAGES.CLOCK_SKEW - 5}})
         self.follow()
         self.follow()
         self.assertEqual(when, self.told()["wl"])
+
+    def test_a_key_held_back_by_a_slower_clock_is_not_told_again(self):
+        # Another replica, its clock 2 s behind, wrote the key back as its now.
+        CACHE.forget_where(lambda key: key == "wl")
+        self.follow()
+        when = self.told()["wl"]
+        SHARED.write_json(self.forgets_path(), {"forgets": {"wl": when - 2}})
+        self.follow()
+        self.follow()
+        self.assertEqual(when - 2, self.told()["wl"], "no tug of war between the clocks")
+
+    def test_a_write_to_tell_again_that_has_aged_out_is_not_written(self):
+        self.PAGES._told["again"]["wl"] = time.time() - self.PAGES.STALE_AFTER - 1
+        self.follow()
+        self.assertEqual({}, self.told())
+
+    def test_reset_leaves_the_loop_asleep(self):
+        self.PAGES._wake.set()
+        self.PAGES.reset()
+        self.assertFalse(self.PAGES._wake.is_set())
 
     def test_a_write_older_than_any_part_served_is_not_told_again(self):
         with mock.patch("time.time", return_value=time.time() - self.PAGES.STALE_AFTER - 1):

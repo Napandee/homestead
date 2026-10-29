@@ -22,13 +22,12 @@ class _Answers(dict):
         _popped(key)
 
     def clear(self):
-        """Drop every answer (a config restore), told as a pop of every key
-        this replica knows of, held or not: one never read here may be
-        served by the others."""
-        keys = {*self, *_epoch}
+        """Drop every answer (a config restore) as a forget of every key this
+        replica knows of, held or not: a read started before it is not kept,
+        and the other replicas hear of it, as one never read here may be
+        served by them."""
+        forget_where(lambda key: True)
         super().clear()
-        for key in keys:
-            _popped(key)
 
 
 _cache = _Answers()
@@ -207,8 +206,9 @@ def drop_where(cache, match):
     kept answers that is forget_where(), which also reaches the keys this
     replica knows of but does not hold, so the other replicas hear of the
     write though this one never read the page (#928). Walking the keys held
-    here would miss those. Another dict (a test's own) has its matching keys
-    popped."""
+    here would miss those. Another dict (a test's own, or a module not yet
+    bound to the kept answers) has its matching keys popped, and tells
+    nothing."""
     if cache is _cache:
         forget_where(lambda key: isinstance(key, str) and match(key))
         return

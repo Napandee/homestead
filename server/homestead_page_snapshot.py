@@ -40,9 +40,11 @@ Every replica changes FORGETS, so it is read, merged and replaced as one step
 under a SharedLock, as the other shared files are. On NFS a replica can still
 merge from a copy read before another's write and so write that key away.
 Each replica checks the file on each look (hear()): a key of its own, told
-in the last STALE_AFTER and now missing or older there, is told again on its
-next turn. The lock is waited on for LOCK_WAIT at most, so a replica stuck
-holding it never holds this loop: the write is tried again next turn."""
+in the last STALE_AFTER and now missing there, or older by over CLOCK_SKEW,
+is told again on its next turn. The lock is waited on for LOCK_WAIT at
+most, so a replica stuck holding it never holds this loop: the write is
+tried again next turn. A lock NFS refuses outright (ENOLCK) also fails the
+write, said once, rather than writing unlocked."""
 import hashlib
 import json
 import os
@@ -91,6 +93,10 @@ _floor = {}             # key -> no leader part read before this is taken in (a 
 FORGETS = "page-forgets.json"
 # Seconds the loop waits for that lock before trying again next turn.
 LOCK_WAIT = 1
+# A write of this replica's held in FORGETS up to this much earlier counts as
+# held: another replica's clock may be that far behind (tell() never writes a
+# time ahead of its own clock), and telling it again would only undo that.
+CLOCK_SKEW = 5
 _forgets_lock = SHARED.SharedLock("page-forgets", strict=True, timeout=LOCK_WAIT)
 _told_lock = threading.Lock()
 # pending: key -> when, written here and not yet told; known: key -> the
@@ -118,6 +124,7 @@ def reset():
     _floor.clear()
     with _told_lock:
         _told.update(pending={}, known={}, mine={}, again={}, seen=None, failing=False)
+    _wake.clear()
 
 
 def wake():
@@ -407,7 +414,11 @@ def tell():
         known, again = _told["known"], _told["again"]
         pending = {key: when for key, when in _told["pending"].items() if when > known.get(key, 0.0)}
         _told["pending"] = dict(pending)    # what was heard, or already told, is dropped
-        for key, when in again.items():    # written away by another replica's merge
+        now = time.time()
+        for key, when in list(again.items()):    # written away by another replica's merge
+            if now - when >= STALE_AFTER:
+                again.pop(key)                   # no part read before it is still served
+                continue
             pending[key] = max(pending.get(key, 0.0), when)
         if not pending:
             return
@@ -449,12 +460,13 @@ def _check_mine(forgets, now):
         for key, when in list(mine.items()):
             if now - when >= STALE_AFTER:
                 mine.pop(key)            # no part read before it is still served
+                again.pop(key, None)
                 continue
             try:
                 held = float(forgets.get(key) or 0.0)
             except (TypeError, ValueError):
                 held = 0.0
-            if held < when:
+            if held < when - CLOCK_SKEW:
                 again[key] = max(again.get(key, 0.0), when)
         missing = bool(again)
     if missing:
