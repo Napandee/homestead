@@ -590,7 +590,19 @@
       storage_classes: ["longhorn-r2", "longhorn-fast"] };
   };
   const volumeDeletePlan = url => {
-    const name = url.searchParams.get("name") || "scratch-test";
+    const name = url.searchParams.get("name") || "scratch-test", released = url.searchParams.get("pv");
+    // A Released volume whose claim name an app uses again (#932): its review
+    // sets it beside the volume the claim uses now.
+    if (released) return {
+      orphan: true, released: true, namespace: "lab", name, confirm: released, uid: `demo-${released}`, resource_version: "42",
+      phase: "Claim name in use again", requested_storage: "10Gi", consumers: [], warnings: [], inventory_complete: true,
+      current: { claim_uid: "demo-claim-now", phase: "Bound", pv: `pvc-demo-${name}`, pv_uid: "demo-pv-now", longhorn: `pvc-demo-${name}`,
+        consumers: [{ kind: "Deployment", name: "frigate", namespace: "lab", active: true, mounts: [] }] },
+      pv: { name: released, uid: "demo-pv-released", phase: "Released", claim_uid: "demo-claim-before", longhorn: released, reclaim_policy: "Retain" },
+      longhorn: { name: released, state: "detached", attached_node: "", replicas: 2, actual_gb: 6.4 },
+      snapshots: { count: 0 }, backups: { count: 1 }, blocked: false, blocking_reasons: [],
+      actions: { detach: { complete: true }, delete_claim: { enabled: false }, delete_data: { enabled: true } },
+    };
     const attached = name === "frigate-config";
     return {
       namespace: "lab", name, uid: `demo-${name}`, resource_version: "42", phase: "Bound",
@@ -2582,11 +2594,14 @@ ssh_pwauth: true
         size: `${size}Gi`, size_bytes: size * GiB, released_at: new Date(Date.now() - 12 * 86400000).toISOString(),
         driver: "driver.longhorn.io", longhorn: pv, hosts, allocated_bytes: size * GiB * hosts.length, old_copy: false, ...extra });
       return {
-        released: { state: "ok", volumes: ask.includes("released") ? [
+        released: { state: "ok", volumes: (ask.includes("released") ? [
           kept("pvc-demo-scratch-1", "vm-imports", "prime-demo-disk-with-a-long-descriptive-name-scratch", 42, ["node-1", "node-2"]),
           kept("pvc-demo-scratch-2", "vm-imports", "prime-demo-disk-2-scratch", 20, ["node-2"]),
           kept("pvc-demo-old-notes", "lab", "notes-data", 5, ["node-1"], { class: "longhorn", old_copy: true }),
-          kept("pv-demo-nfs", "media", "archive", 100, [], { class: "nfs", driver: "nfs.csi.k8s.io", longhorn: "", allocated_bytes: 100 * GiB })] : [] },
+          kept("pv-demo-nfs", "media", "archive", 100, [], { class: "nfs", driver: "nfs.csi.k8s.io", longhorn: "", allocated_bytes: 100 * GiB })] : [])
+          // An app deployed again with its old claim name ("reused"): the old volume shows on its card.
+          .concat(ask.includes("reused") ? [kept("pvc-demo-frigate-before", "lab", "frigate-config", 10, ["harvester-node1", "harvester-node2"],
+            { class: "longhorn-r2", claim_reused: true })] : []) },
         iscsi: { state: "ok", hosts: ask.includes("iscsi") ? [{ node: "node-2", sessions: [
           { sid: 67, target: "iqn.2019-10.io.longhorn:pvc-demo-notes", volume: "pvc-demo-notes", namespace: "lab", claim: "notes-data",
             state: "FAILED", address: "192.0.2.40", port: 3260, disks: ["sdj"] },

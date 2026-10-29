@@ -205,7 +205,14 @@ nothing by itself):
   gives each one's last claim, class, size and when it was released, and opens
   the reviewed delete for a Longhorn volume (admin), or **Remove old copy** for
   the original a storage-class change kept. Volumes of other drivers are named
-  only: delete them with that storage's own tools.
+  only: delete them with that storage's own tools. The delete is asked for by
+  the volume's PV. When an app was deployed again with the same claim name, its
+  review sets the Released volume beside the one the claim uses now (PV name and
+  UID, phase, claim UID, Longhorn volume, what uses it), refuses unless they are
+  plainly different volumes, and is confirmed by the Released volume's name; the
+  delete is pinned to that PV's name, UID and version and never changes the
+  current one. Such an app's card and details say how many old volumes of its
+  claims still hold space, and how much, with the reviewed delete.
 - **Stale iSCSI sessions:** when a host is lost while a Longhorn engine runs on
   it, the instance-manager is replaced, and the host keeps its iSCSI session to
   the old address once it comes back. A later attach of that volume on the host

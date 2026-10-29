@@ -63,8 +63,8 @@ def _released(pvs):
     except Exception:
         copies = None                 # hosts unknown; the volumes are still named
     try:
-        # The reviewed delete finds the claim by name: a new claim of that name
-        # is another volume's, and the review refuses it. None: not read.
+        # A new claim of the old name is another volume's: the reviewed delete,
+        # asked for by the PV, sets the two side by side. None: not read.
         claims = {((c.get("metadata") or {}).get("namespace"), (c.get("metadata") or {}).get("name"))
                   for c in KUBE.items("/api/v1/persistentvolumeclaims")}
     except Exception:

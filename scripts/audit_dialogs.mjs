@@ -42,6 +42,7 @@ const DIALOGS = [
   ["released-volumes-review", "dash", "window.__demoLeftovers='released';releasedVolumesReview()"],
   ["released-volumes-none", "dash", "window.__demoLeftovers='';releasedVolumesReview()"],
   ["stale-iscsi-sessions", "dash", "window.__demoLeftovers='iscsi';staleSessionsReview('node-2')"],
+  ["released-volume-reused-delete", "dash", "volumeDelete({name:'pvc-demo-frigate-before',pvc_name:'frigate-config',namespace:'lab',pv:'pvc-demo-frigate-before'})"],
   ["container-diagnostics", "workloads", "wlDiagnostics('lab','example-server')"],
   ["container-command-review", "workloads", "wlDiagnostics('lab','example-server')", "document.querySelector('#diagnosticCommand').value='uname -a';diagnosticReview({disabled:false})"],
   ["firewall-create", "network", "firewallEdit()"],

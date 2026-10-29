@@ -4,7 +4,7 @@
    name there), or Remove old copy for the original a class change kept.
    Stale iSCSI sessions: a host's sessions to an instance-manager that is gone,
    with the commands that end them on the host. Homestead runs nothing here. */
-let releasedVolumesShown = [];
+let releasedVolumesShown = [], releasedVolumesFilter = null;
 
 const leftoverGiB = bytes => { const g = (bytes || 0) / 1024 ** 3; return `${g >= 10 ? Math.round(g) : Math.round(g * 10) / 10} GiB`; };
 const leftoverAge = at => { const t = Date.parse(at); return Number.isFinite(t) ? fmtAgo(Math.max(0, (Date.now() - t) / 1000)) : "—"; };
@@ -14,24 +14,28 @@ async function leftoverFacts(title) {
   catch (e) { modal(title, UI.callout("bad", "Could not read storage", esc(e.message)) + UI.actions(UI.cancel("Close"))); return null; }
 }
 
-async function releasedVolumesReview() {
+// Of one app's claims (filter {namespace, claims}), or all of them.
+const releasedOfApp = (rows, filter) => !filter ? rows
+  : rows.filter(v => v.namespace === filter.namespace && (filter.claims || []).includes(v.claim));
+
+async function releasedVolumesReview(filter = null) {
   const title = "Released volumes", facts = await leftoverFacts(title);
   if (!facts) return;
-  const r = facts.released || {}, rows = r.volumes || [];
-  releasedVolumesShown = rows;
+  const r = facts.released || {}, rows = releasedOfApp(r.volumes || [], filter);
+  releasedVolumesShown = rows; releasedVolumesFilter = filter;
   if (r.state === "unknown") return modal(title, UI.callout("warn", "Could not read Released volumes", esc(r.error || "")) + UI.actions(UI.cancel("Close")));
   if (!rows.length) return modal(title, UI.empty("No Released volumes: every kept volume has a claim.") + UI.actions(UI.cancel("Close")));
   const n = rows.length, total = leftoverGiB(rows.reduce((sum, v) => sum + (v.allocated_bytes || 0), 0));
-  // Deleting after review finds the volume's claim by name; a new claim of
-  // that name is another volume's, and that review would refuse it.
+  // Each delete is asked for by its PV: when the claim name is in use
+  // again, its review sets this volume beside the one the claim uses now.
   const action = (v, i) => v.old_copy
     ? UI.button("Remove old copy", `releasedVolumeDelete(${i})`, { kind: "danger", attrs: 'data-need="admin"' })
-    : v.longhorn && v.claim_reused ? '<span class="dim xs">Its claim name is in use again: delete it in Longhorn</span>'
     : v.longhorn ? UI.button("Review delete", `releasedVolumeDelete(${i})`, { kind: "danger", attrs: 'data-need="admin"' })
     : '<span class="dim xs">Use your storage\'s own tools</span>';
   const table = UI.table([{ label: "Volume" }, { label: "Class" }, { label: "Holds", className: "mono" }, { label: "Released" }, { label: "" }],
     rows.map((v, i) => [
-      `${esc(v.namespace && v.claim ? `${v.namespace}/${v.claim}` : v.pv)}<span class="sub mono">${esc(v.pv)}${v.old_copy ? " · old copy of a class change" : ""}</span>`,
+      `${esc(v.namespace && v.claim ? `${v.namespace}/${v.claim}` : v.pv)}<span class="sub mono">${esc(v.pv)}${v.old_copy ? " · old copy of a class change" : ""}</span>` +
+        (v.claim_reused ? '<span class="sub">Its claim name is in use again, by another volume</span>' : ""),
       esc(v.class || "—"),
       `${esc(v.size || "?")}${v.hosts?.length ? `<span class="sub">${esc(`${v.hosts.length} ${v.hosts.length === 1 ? "copy" : "copies"} · ${v.hosts.join(", ")}`)}</span>` : ""}`,
       esc(leftoverAge(v.released_at)), action(v, i)]));
@@ -44,8 +48,37 @@ async function releasedVolumeDelete(i) {
   const v = releasedVolumesShown[i];
   if (!v) return;
   // Its confirmation replaces this list; show the list again once it is done.
-  if (v.old_copy) { await reclassRemoveOld(v.pv); return releasedVolumesReview(); }
-  return volumeDelete({ name: v.longhorn, pvc_name: v.claim, namespace: v.namespace });
+  if (v.old_copy) { await reclassRemoveOld(v.pv); return releasedVolumesReview(releasedVolumesFilter); }
+  return volumeDelete({ name: v.longhorn, pvc_name: v.claim, namespace: v.namespace, pv: v.pv });
+}
+
+/* The per-app row (#932 follow-up): an app whose claim names old Released
+   volumes still hold says so, with the space, on its card and its details.
+   Read once with the Containers page; an unread list gives no row. */
+let releasedVolumesKnown = [];
+async function releasedVolumesLoad() {
+  try {
+    const r = (await api("/api/storage/leftovers", { keep: true }))?.released;
+    releasedVolumesKnown = r?.state === "ok" ? (r.volumes || []).filter(v => v.longhorn || v.old_copy) : [];
+  } catch { releasedVolumesKnown = []; }
+  return releasedVolumesKnown;
+}
+
+function appReleasedRow(w) {
+  const claims = w.claims || [], rows = releasedOfApp(releasedVolumesKnown, { namespace: w.ns, claims });
+  if (!rows.length) return "";
+  const n = rows.length, held = leftoverGiB(rows.reduce((sum, v) => sum + (v.allocated_bytes || 0), 0));
+  const run = n === 1 ? `releasedVolumeDeleteFor(${jsq(rows[0].namespace)},${jsq(rows[0].pv)})`
+    : `releasedVolumesReview({namespace:${jsq(w.ns)},claims:${esc(JSON.stringify(claims))}})`;
+  return `<div class="wreleased dim xs"><span>${esc(`${n} old volume${n === 1 ? "" : "s"} of ${n === 1 ? rows[0].claim : "its claims"} still hold${n === 1 ? "s" : ""} ${held}`)}</span>
+    <button type="button" class="linkish" onclick="${run}"${n === 1 ? ' data-need="admin"' : ""}>${n === 1 ? "Review delete" : "Review"}</button></div>`;
+}
+
+function releasedVolumeDeleteFor(namespace, pv) {
+  const v = releasedVolumesKnown.find(x => x.namespace === namespace && x.pv === pv);
+  if (!v) return;
+  if (v.old_copy) return reclassRemoveOld(v.pv);
+  return volumeDelete({ name: v.longhorn, pvc_name: v.claim, namespace: v.namespace, pv: v.pv });
 }
 
 async function staleSessionsReview(node) {
@@ -74,4 +107,5 @@ async function staleSessionsReview(node) {
     UI.actions(UI.cancel("Close")), true);
 }
 
-if (typeof window !== "undefined") Object.assign(window, { releasedVolumesReview, releasedVolumeDelete, staleSessionsReview });
+if (typeof window !== "undefined") Object.assign(window, { releasedVolumesReview, releasedVolumeDelete, staleSessionsReview,
+  releasedVolumesLoad, appReleasedRow, releasedVolumeDeleteFor });

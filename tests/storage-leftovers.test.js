@@ -93,18 +93,58 @@ test("each Longhorn volume opens the reviewed delete; an old copy its removal; a
   assert.equal((html.match(/data-need="admin"/g) || []).length, 2, "one admin action per volume Homestead can delete");
   t.ctx.releasedVolumeDelete(0);
   t.ctx.releasedVolumeDelete(1);
-  assert.deepEqual(JSON.parse(JSON.stringify(t.calls)), [["volumeDelete", { name: "pvc-a", pvc_name: "disk-1-scratch", namespace: "vm-imports" }],
+  // Asked for by its PV: the review is of that volume, never of a claim found by name.
+  assert.deepEqual(JSON.parse(JSON.stringify(t.calls)), [["volumeDelete", { name: "pvc-a", pvc_name: "disk-1-scratch", namespace: "vm-imports", pv: "pvc-a" }],
     ["reclassRemoveOld", "pvc-old"]]);
   assert.match(html, /storage's own tools/);
 });
 
-test("a volume whose claim name is in use again offers no delete, and says why", async () => {
-  // The reviewed delete finds the claim by name and would refuse the new one.
+test("a volume whose claim name is in use again opens the review of that PV, and says the name is taken", async () => {
   const t = setup(facts([scratch("pvc-a", "photos", ["node-1"], { claim_reused: true })]));
   await t.ctx.releasedVolumesReview();
   const html = t.modals.at(-1).html;
-  assert.doesNotMatch(html, /data-need="admin"/);
+  assert.equal((html.match(/data-need="admin"/g) || []).length, 1);
   assert.match(html, /claim name is in use again/);
+  t.ctx.releasedVolumeDelete(0);
+  assert.deepEqual(JSON.parse(JSON.stringify(t.calls)), [["volumeDelete", { name: "pvc-a", pvc_name: "photos", namespace: "vm-imports", pv: "pvc-a" }]]);
+});
+
+// The per-app row: an app whose claim names old Released volumes still hold.
+const app = (claims, ns = "vm-imports") => ({ ns, name: "notes", claims });
+
+test("an app shows its old Released volumes, with the space they hold, only when it has some", async () => {
+  const t = setup(facts([RELEASED[0], scratch("pvc-c", "disk-1-scratch", ["node-1"], { claim_reused: true })]));
+  await t.ctx.releasedVolumesLoad();
+  assert.equal(t.ctx.appReleasedRow(app(["notes-data"])), "", "no Released volume of its claims: no row");
+  assert.equal(t.ctx.appReleasedRow(app(["disk-1-scratch"], "lab")), "", "the same claim name in another namespace is not this app's");
+  const row = t.ctx.appReleasedRow(app(["disk-1-scratch", "other"]));
+  assert.match(row, /2 old volumes/);
+  assert.match(row, /120 GiB/);
+  assert.match(row, /releasedVolumesReview\(/);
+  const empty = setup(facts([]));
+  await empty.ctx.releasedVolumesLoad();
+  assert.equal(empty.ctx.appReleasedRow(app(["disk-1-scratch"])), "");
+});
+
+test("one old volume opens its reviewed delete directly; several open their list, filtered to the app", async () => {
+  const t = setup(facts([RELEASED[0], scratch("pvc-c", "disk-1-scratch", ["node-1"], { claim_reused: true }), RELEASED[1]]));
+  await t.ctx.releasedVolumesLoad();
+  const one = t.ctx.appReleasedRow(app(["disk-2-scratch"]));
+  assert.match(one, /1 old volume /);
+  assert.match(one, /releasedVolumeDeleteFor\(/);
+  assert.match(one, /data-need="admin"/, "only an admin is offered the delete");
+  t.ctx.releasedVolumeDeleteFor("vm-imports", "pvc-b");
+  assert.deepEqual(JSON.parse(JSON.stringify(t.calls.at(-1))), ["volumeDelete", { name: "pvc-b", pvc_name: "disk-2-scratch", namespace: "vm-imports", pv: "pvc-b" }]);
+  await t.ctx.releasedVolumesReview({ namespace: "vm-imports", claims: ["disk-1-scratch"] });
+  const html = t.modals.at(-1).html;
+  assert.match(html, /pvc-a/);
+  assert.doesNotMatch(html, /disk-2-scratch/);
+});
+
+test("an unread list gives no app row, rather than a wrong one", async () => {
+  const t = setup({ released: { state: "unknown", error: "forbidden", volumes: [] }, iscsi: { state: "n/a", hosts: [] } });
+  await t.ctx.releasedVolumesLoad();
+  assert.equal(t.ctx.appReleasedRow(app(["disk-1-scratch"])), "");
 });
 
 test("after an old copy is removed, the list is read again", async () => {
