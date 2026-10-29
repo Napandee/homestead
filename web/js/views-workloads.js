@@ -17,7 +17,7 @@ async function viewWorkloads() {
 }
 
 /* An app's old Released volumes and the space they hold (storage-leftovers.js). */
-const workloadReleasedRow = w => !remoteRow(w) && typeof appReleasedRow === "function" ? appReleasedRow(w) : "";
+const workloadReleasedRow = (w, detail = false) => !remoteRow(w) && typeof appReleasedRow === "function" ? appReleasedRow(w, detail) : "";
 
 const updateKey = (ns, name) => `${ns}/${name}`;
 const workloadUpdate = (ns, name) => (STATE.data.imageUpdateMap || {})[updateKey(ns, name)];
@@ -1043,7 +1043,7 @@ function workloadTableRows(rows) {
           <div class="wl-detail-access"><span>Access</span><b class="waccess">${accessPorts(w.ports)}</b></div>
           ${(w.claims || []).length && !remoteRow(w) ? `<div class="wl-detail-volumes"><span>Volumes</span><b class="row">${w.claims.map(claim =>
             `<button type="button" class="tag info linkish" title="Open ${esc(claim)} in Volumes" onclick="openWorkloadVolume(${jsq(claim)})">${esc(claim)}</button>`).join("")}</b></div>` : ""}
-          ${workloadReleasedRow(w) ? `<div class="wl-detail-released"><span>Old volumes</span>${workloadReleasedRow(w)}</div>` : ""}
+          ${workloadReleasedRow(w) ? `<div class="wl-detail-released"><span>Old volumes</span>${workloadReleasedRow(w, true)}</div>` : ""}
           ${gitopsDetail(w)}
           ${startsAfterFact(w)}
         </div>

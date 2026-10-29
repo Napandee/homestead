@@ -64,14 +64,15 @@ async function releasedVolumesLoad() {
   return releasedVolumesKnown;
 }
 
-function appReleasedRow(w) {
+function appReleasedRow(w, detail = false) {
   const claims = w.claims || [], rows = releasedOfApp(releasedVolumesKnown, { namespace: w.ns, claims });
   if (!rows.length) return "";
   const n = rows.length, held = leftoverGiB(rows.reduce((sum, v) => sum + (v.allocated_bytes || 0), 0));
   const run = n === 1 ? `releasedVolumeDeleteFor(${jsq(rows[0].namespace)},${jsq(rows[0].pv)})`
     : `releasedVolumesReview({namespace:${jsq(w.ns)},claims:${esc(JSON.stringify(claims))}})`;
-  return `<div class="wreleased dim xs"><span>${esc(`${n} old volume${n === 1 ? "" : "s"} of ${n === 1 ? rows[0].claim : "its claims"} still hold${n === 1 ? "s" : ""} ${held}`)}</span>
-    <button type="button" class="linkish" onclick="${run}"${n === 1 ? ' data-need="admin"' : ""}>${n === 1 ? "Review delete" : "Review"}</button></div>`;
+  const text = esc(`${n} old volume${n === 1 ? "" : "s"} of ${n === 1 ? rows[0].claim : "its claims"} still hold${n === 1 ? "s" : ""} ${held}`);
+  return `<${detail ? "b" : "div"} class="wreleased${detail ? "" : " dim xs"}">${detail ? text : `<span>${text}</span>`}
+    <button type="button" class="linkish" onclick="${run}"${n === 1 ? ' data-need="admin"' : ""}>${n === 1 ? "Review delete" : "Review"}</button></${detail ? "b" : "div"}>`;
 }
 
 function releasedVolumeDeleteFor(namespace, pv) {
