@@ -140,6 +140,15 @@ class ViewAndHealthTests(StateCase):
             view = WT.view()
         self.assertEqual((2, 22, "2026-10-28T22:00:00Z"), (view["weekday"], view["hour"], view["next"]))
 
+    def test_the_next_run_skips_a_slot_in_the_week_that_already_ran(self):
+        """Ran Saturday, moved to Sunday the same day: Sunday waits for next week."""
+        self.save({"enabled": True, "weekday": 6, "hour": 4, "last": {"slot": SAT}})
+        LH.bind(lambda path, **_: {"items": []}, None, {}, "longhorn")
+        with mock.patch.object(OPS, "snapshot", return_value=[]), \
+                mock.patch.object(WT.time, "time", return_value=SAT + 3600):
+            view = WT.view()
+        self.assertEqual("2026-11-01T04:00:00Z", view["next"], "Sunday 1 November, not the 25th")
+
     def test_a_failed_trim_says_when_it_is_tried_again(self):
         issues = WT.issues({"weekday": 2, "hour": 22, "last": {"failed": [{"volume": "pvc-a", "message": "x"}]}})
         self.assertIn("next Wednesday", issues[0]["reason"])

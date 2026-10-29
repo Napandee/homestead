@@ -348,6 +348,9 @@ def view():
         mine = ""
     weekday, hour = slot_of(state)
     upcoming = last_slot(time.time(), weekday, hour) + WEEK
+    ran = (state.get("last") or {}).get("slot")
+    if isinstance(ran, (int, float)) and _week(ran) == _week(upcoming):
+        upcoming += WEEK                    # that week has had its run (due())
     return {"enabled": enabled, "next": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(upcoming)) if enabled else "",
             "last": state.get("last"), "running": _running(), "theirs": mine, "weekday": weekday, "hour": hour}
 
