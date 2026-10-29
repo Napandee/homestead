@@ -55,8 +55,25 @@ def sees_values(role):
     return AUTH.allows(role, reveal_role())
 
 
+AUTHORITY_END = re.compile(r"[/?#\\]")
+DIGITS = frozenset("0123456789")
+
+
+def _login_or_odd_port(token):
+    """The authority (after the slashes, up to "/", "?", "#" or "\\") holds a
+    ":" that is not followed by digits alone to its end: user:password
+    (perhaps cut off before its "@"), or a port that is not one."""
+    rest = token.partition(":")[2].lstrip("/\\")
+    end = AUTHORITY_END.search(rest)
+    authority = rest[:end.start()] if end else rest
+    if ":" not in authority:
+        return False
+    head, _, port = authority.rpartition(":")
+    return ":" in head or not port or not set(port) <= DIGITS
+
+
 def _hidden(token):
-    return any(mark in token for mark in MARKS) or bool(SECRET_WORD.search(token))
+    return any(mark in token for mark in MARKS) or bool(SECRET_WORD.search(token)) or _login_or_odd_port(token)
 
 
 def _masked(token):

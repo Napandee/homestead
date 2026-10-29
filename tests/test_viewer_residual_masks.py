@@ -472,6 +472,19 @@ class ReviewStrip(unittest.TestCase):
                 self.assertEqual(once, strip(once))
                 self.assertTrue(MASKS.has_stripped(once))
 
+    def test_a_colon_in_the_authority_hides_the_token_unless_it_is_a_port(self):
+        strip = MASKS.strip_url_secrets
+        for shown in ("https://h.example.com:8443/x", "https://h.example.com:8443", "http://198.51.100.7:80/a/b"):
+            self.assertEqual(shown, strip(shown))
+        for given in ("failed: https://user:secret", "https://user:secret/x", "https://h.example.com:abc/x",
+                      "https://h.example.com:/x", "https://a:b:8443/x", "https:\\\\user:secret"):
+            with self.subTest(given=given):
+                once = strip(given)
+                self.assertNotIn("secret", once)
+                self.assertNotIn(":abc", once)
+                self.assertIn("://•••", once)
+                self.assertEqual(once, strip(once))
+
     def test_a_token_runs_to_ascii_whitespace_only(self):
         # A stretch after '"', "<" or a non-ASCII space is part of the token, so it is hidden with it.
         self.assertEqual('see https://••• next', MASKS.strip_url_secrets('see https://h.example.com/?a=1"&token=S next'))

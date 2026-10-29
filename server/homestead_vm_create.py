@@ -199,7 +199,7 @@ def list_vm_images():
                          "progress": status.get("progress", 0),
                          "ready": imported.get("status") == "True",
                          "failed": imported.get("status") == "False" and imported.get("reason") == "ImportFailed",
-                         "message": " ".join(str(imported.get("message") or "").split())[:240],
+                         "message": MASKS.cut(MASKS.squeeze(imported.get("message") or ""), 240),
                          # Where it came from and when, so the image store
                          # knows one of its own when it finds it.
                          "url": str(i["spec"].get("url") or ""), "source": i["spec"].get("sourceType", ""),
@@ -284,7 +284,7 @@ def vm_image_cache():
                      "size_mb": round(size / 1024 ** 2, 1),
                      "virtual_size_gb": round(int(status.get("virtualSize", 0) or 0) / 1024 ** 3, 1),
                      "state": state, "progress": int(status.get("progress", 0) or 0),
-                     "message": " ".join(str(imported.get("message") or "").split())[:240],
+                     "message": MASKS.cut(MASKS.squeeze(imported.get("message") or ""), 240),
                      "storage_class": klass, "nodes": nodes, "copies": len(nodes),
                      "disks": sorted(disks), "used_by": sorted(used_by),
                      "deleting": bool(meta.get("deletionTimestamp"))})
