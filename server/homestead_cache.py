@@ -21,6 +21,15 @@ class _Answers(dict):
         super().__delitem__(key)
         _popped(key)
 
+    def clear(self):
+        """Drop every answer (a config restore), told as a pop of every key
+        this replica knows of, held or not: one never read here may be
+        served by the others."""
+        keys = {*self, *_epoch}
+        super().clear()
+        for key in keys:
+            _popped(key)
+
 
 _cache = _Answers()
 _lock = threading.Lock()
@@ -191,3 +200,17 @@ def forget_where(match, at=None):
                 fn(dropped)
             except Exception as error:   # the write has happened: never fail it here
                 print(f"cache: a forget listener failed: {str(error)[:160]}", flush=True)
+
+
+def drop_where(cache, match):
+    """A write's bust: drop every answer in cache whose key matches. On the
+    kept answers that is forget_where(), which also reaches the keys this
+    replica knows of but does not hold, so the other replicas hear of the
+    write though this one never read the page (#928). Walking the keys held
+    here would miss those. Another dict (a test's own) has its matching keys
+    popped."""
+    if cache is _cache:
+        forget_where(lambda key: isinstance(key, str) and match(key))
+        return
+    for key in [key for key in cache if match(key)]:
+        cache.pop(key, None)
