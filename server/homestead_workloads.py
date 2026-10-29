@@ -30,6 +30,7 @@ import homestead_names as NAMES
 import homestead_networking as NETWORK
 import homestead_operations as OPS
 import homestead_outage as OUTAGE
+import homestead_value_masks as MASKS
 import homestead_place as PLACE
 import homestead_priority as PRIORITY
 import homestead_privileges as PRIV
@@ -107,15 +108,26 @@ def logs(request):
         return ROUTER.Reply(404, {"error": "Logs are not available yet because no pod exists."})
     tail = max(20, min(1000, int((q.get("tail") or [300])[0])))
     container = _arg(request, "container")
+    try:
+        found = kget(f"/api/v1/namespaces/{ns}/pods/{pod}")
+    except Exception:
+        found = None
+    # The Helm controller's pods run helm with the chart's values, and a
+    # chart can print them: those logs need the role that may reveal a
+    # Secret. A pod that cannot be read cannot be told apart, so it is
+    # refused too below that role.
+    if not MASKS.sees_values(request.role) and (found is None or MASKS.helm_job_pod(found)):
+        if found is None:
+            return ROUTER.Reply(409, {"error": f"{pod} could not be read (it may have gone), so its log is not shown."})
+        need = MASKS.reveal_role()
+        return ROUTER.Reply(403, {"error": f"Helm's install logs can show a chart's values, so they need the {need} role.",
+                                  "role": need})
     if not container:
         # A pod with more than one container has to be told which;
         # asking without a name is a 400 from Kubernetes.
-        try:
-            spec = kget(f"/api/v1/namespaces/{ns}/pods/{pod}").get("spec", {}) or {}
-            names = [c.get("name") for c in spec.get("containers", []) or []]
-            container = names[0] if names else ""
-        except Exception:
-            container = ""
+        spec = (found or {}).get("spec", {}) or {}
+        names = [c.get("name") for c in spec.get("containers", []) or []]
+        container = names[0] if names else ""
     query = f"tailLines={tail}&timestamps=true" + (
         f"&container={urllib.parse.quote(container)}" if container else "")
     req = urllib.request.Request(f"{API}/api/v1/namespaces/{ns}/pods/{pod}/log?{query}",

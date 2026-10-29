@@ -26,6 +26,7 @@ import urllib.parse
 import urllib.request
 
 import homestead_names as NAMES
+import homestead_value_masks as MASKS
 import homestead_routes
 
 kget = ksend = None
@@ -171,6 +172,8 @@ def release(namespace, name, include_sensitive=True):
             item.pop("description", None)
         if result["source"]:
             result["source"].pop("values", None)
+            # A private repository's address can carry its login.
+            MASKS.strip_in_place(result["source"])
         result["sensitive_hidden"] = True
     return result
 

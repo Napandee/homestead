@@ -20,7 +20,9 @@ import time
 import urllib.error
 import urllib.parse
 
+import homestead_names as NAMES
 import homestead_outage as OUTAGE
+import homestead_value_masks as MASKS
 import homestead_yaml as YAML
 
 kget = ksend = table_get = None
@@ -115,7 +117,10 @@ def _name(value, label="name"):
     return value
 
 
-def list_objects(group, version, resource, namespace=""):
+def list_objects(group, version, resource, namespace="", see_values=True):
+    """One page of a kind, as the API server's printer columns. A role below
+    reveal (not see_values) gets each address without its credentials: a
+    column can print any field, a chart's repository among them."""
     kind = _kind(group, version, resource)
     if namespace:
         _name(namespace, "namespace")
@@ -129,6 +134,8 @@ def list_objects(group, version, resource, namespace=""):
         rows.append({"name": meta.get("name", ""), "namespace": meta.get("namespace", ""),
                      "created": meta.get("creationTimestamp", ""),
                      "cells": [cells[i] if i < len(cells) else "" for i in keep]})
+        if not see_values:
+            MASKS.strip_in_place(rows[-1]["cells"])
     return {"kind": kind, "columns": [{"name": c.get("name", ""), "type": c.get("type", "string"),
                                        "description": c.get("description", "")[:160]} for c in columns],
             "rows": rows, "more": bool((table.get("metadata") or {}).get("continue"))}
@@ -204,45 +211,85 @@ STATUS_FIELDS = ("conditions", "phase", "state", "observedGeneration", "ready", 
                  "availableReplicas", "updatedReplicas", "currentReplicas", "unavailableReplicas")
 CONDITION_FIELDS = ("type", "status", "reason", "message", "lastTransitionTime", "lastUpdateTime",
                     "lastProbeTime", "observedGeneration")
-# Annotations a role below reveal sees in full, at every depth: those under
-# these domains, unless they hold a copy of the object (APPLIED). Any other
-# annotation keeps its name and shows its size.
-SAFE_ANNOTATION_DOMAINS = ("homestead.io", "kubernetes.io", "k8s.io", "x-k8s.io", "kubevirt.io", "longhorn.io",
-                           "harvesterhci.io", "helm.sh", "cattle.io", "cni.cncf.io", "projectcalico.org",
-                           "kube-vip.io", "fluxcd.io", "argoproj.io")
+# Annotations a role below reveal sees in full, at every depth: those whose
+# prefix is one of these exactly (not any subdomain: ingress-nginx's
+# nginx.ingress.kubernetes.io carries config snippets and auth addresses,
+# and Rancher has many cattle.io subdomains), unless the name says it holds
+# a command, headers, a credential or a copy of values (UNSAFE_ANNOTATION,
+# APPLIED). Any other annotation keeps its name and shows "(hidden)".
+SAFE_ANNOTATION_PREFIXES = frozenset((
+    "homestead.io",
+    "kubernetes.io", "deployment.kubernetes.io", "kubectl.kubernetes.io", "rbac.authorization.kubernetes.io",
+    "endpoints.kubernetes.io", "pv.kubernetes.io", "volume.kubernetes.io", "volume.beta.kubernetes.io",
+    "volumes.kubernetes.io", "csi.alpha.kubernetes.io", "csi.volume.kubernetes.io", "batch.kubernetes.io",
+    "storageclass.kubernetes.io", "storage.alpha.kubernetes.io", "node.alpha.kubernetes.io", "alpha.kubernetes.io",
+    "control-plane.alpha.kubernetes.io", "descheduler.alpha.kubernetes.io", "cluster-autoscaler.kubernetes.io",
+    "pod-security.kubernetes.io", "api-approved.kubernetes.io",
+    "k8s.io", "gateway.networking.k8s.io", "cluster.x-k8s.io",
+    "kubevirt.io", "vm.kubevirt.io", "pool.kubevirt.io", "instancetype.kubevirt.io", "template.kubevirt.io",
+    "cdi.kubevirt.io", "operator.cdi.kubevirt.io", "certificates.kubevirt.io",
+    "longhorn.io", "driver.longhorn.io", "node.longhorn.io",
+    "harvesterhci.io", "network.harvesterhci.io",
+    "helm.sh", "meta.helm.sh",
+    "cattle.io", "field.cattle.io", "lifecycle.cattle.io", "objectset.rio.cattle.io", "helm.cattle.io",
+    "helmcharts.helm.cattle.io", "helmcharts.cattle.io", "etcd.k3s.cattle.io", "addon.k3s.cattle.io",
+    "k8s.v1.cni.cncf.io", "cni.projectcalico.org", "projectcalico.org", "kube-vip.io",
+    "fluxcd.io", "kustomize.toolkit.fluxcd.io", "helm.toolkit.fluxcd.io", "source.toolkit.fluxcd.io",
+    "reconcile.fluxcd.io", "argoproj.io", "argocd.argoproj.io"))
+# By the name after the prefix: kubectl's change-cause records a command line
+# (kubectl set env ... TOKEN=...), a snippet or header carries headers, and
+# CDI copies a DataVolume's extraHeaders onto its claim.
+UNSAFE_ANNOTATION = re.compile(r"change-cause|snippet|header|pass|pwd|secret|token|credential|auth|cookie|"
+                               r"private|key|cert", re.I)
+# Homestead's own copy of a chart's previous values during an upgrade.
+UNSAFE_ANNOTATIONS = frozenset((NAMES.key("helm-previous"),))
 
 
 def _safe_annotation(key):
-    domain = key.split("/", 1)[0] if "/" in key else ""
-    return not APPLIED.search(key) and any(domain == d or domain.endswith("." + d) for d in SAFE_ANNOTATION_DOMAINS)
+    prefix, _, name = key.rpartition("/")
+    return (prefix in SAFE_ANNOTATION_PREFIXES and key not in UNSAFE_ANNOTATIONS
+            and not UNSAFE_ANNOTATION.search(name) and not APPLIED.search(key))
+
+
+def _about(lines):
+    """A line count, rounded: an exact size says too much about a value."""
+    if lines < 10:
+        return "under 10 lines"
+    scale = 10 ** (len(str(lines)) - 1)
+    return f"about {int(lines / scale + 0.5) * scale} lines"
 
 
 def _note(value, role):
-    lines = len(YAML.dump(value).splitlines()) if isinstance(value, (dict, list)) else len(str(value).splitlines() or [""])
-    return f"{HIDDEN} (hidden: needs the {role} role, {lines} line{'' if lines == 1 else 's'})"
+    if isinstance(value, str) and value.startswith(HIDDEN):
+        return value
+    if isinstance(value, (dict, list)):
+        size = f", {_about(len(YAML.dump(value).splitlines()))}"
+    else:
+        size = f", {_about(len(str(value).splitlines()))}" if "\n" in str(value) else ""
+    return f"{HIDDEN} (hidden: needs the {role} role{size})"
 
 
 def _leaves(value):
-    """A map's keys and a list's length, with every leaf as HIDDEN."""
+    """A map's own keys or a list's length, each value as HIDDEN: what is
+    below a key can be data too (a map keyed by user name)."""
     if isinstance(value, dict):
-        return {key: _leaves(item) for key, item in value.items()}
+        return {key: HIDDEN for key in value}
     if isinstance(value, list):
-        return [_leaves(item) for item in value]
+        return [HIDDEN for _ in value]
     return HIDDEN
 
 
 def _masked(value):
-    """A field's shape without its content: a text's lines or length, a
-    map's or list's structure. Masking twice changes nothing."""
+    """A field's shape without its content: a text's rounded line count, a
+    map's own keys. Masking twice changes nothing."""
     if isinstance(value, (dict, list)):
         return _leaves(value)
     text = str(value)
     if text.startswith(HIDDEN):
         return text
     if "\n" in text:
-        lines = len(text.splitlines())
-        return f"{HIDDEN} (hidden, {lines} line{'' if lines == 1 else 's'})"
-    return f"{HIDDEN} (hidden, {len(text)} characters)"
+        return f"{HIDDEN} (hidden, {_about(len(text.splitlines()))})"
+    return f"{HIDDEN} (hidden)"
 
 
 def _annotation_fields(metadata, at, keep):
@@ -375,7 +422,10 @@ def hide_for_low_role(obj, kind, role):
         elif status is not None:
             obj["status"] = _note(status, role)
             hidden.append("status")
-    return hidden + [path for path in hide_sensitive(obj, kind["group"]) if path not in hidden]
+    hidden += [path for path in hide_sensitive(obj, kind["group"]) if path not in hidden]
+    # Last, every address left anywhere (a chart's repository, a webhook's
+    # URL, an environment value) loses its user, password and credentials.
+    return hidden + [path for path in MASKS.strip_in_place(obj) if path not in hidden]
 
 
 def _has_mask(value):
@@ -391,6 +441,8 @@ def _refuse_masked(obj, group):
     """A masked copy saved back would overwrite the real values with the mask."""
     masked = [key for key, value in obj.items() if key not in ("apiVersion", "kind", "metadata") and _has_mask(value)]
     masked += [path for parent, key, path, _ in _sensitive_fields(obj, group) if _has_mask(parent[key])]
+    # An address stripped of its credentials, anywhere (metadata included).
+    masked += [key for key, value in obj.items() if key not in ("apiVersion", "kind") and MASKS.has_stripped(value)]
     if masked:
         raise ValueError(f"{masked[0]} is hidden in this copy; open the object as an admin (and reveal a "
                          "Secret) and edit that copy, or the mask would be saved as its value")

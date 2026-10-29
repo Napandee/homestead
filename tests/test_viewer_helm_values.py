@@ -363,17 +363,17 @@ class TheResourceBrowser(Base):
             self.assertNotIn("hunter2", repr(answer))
             self.assertTrue(answer["secret_hidden"])
 
-    def test_the_viewer_sees_that_each_field_exists_and_its_size(self):
+    def test_the_viewer_sees_that_each_field_exists_and_its_rough_size(self):
         chart = self.route("/api/resources/object", "HelmChart", "viewer")
         spec = chart["object"]["spec"]
-        self.assertEqual("••• (hidden, 3 lines)", spec["valuesContent"])
+        self.assertEqual("••• (hidden, under 10 lines)", spec["valuesContent"])
         self.assertEqual({"auth.adminPassword": "•••", "replicas": "•••"}, spec["set"])
-        self.assertEqual("••• (hidden, 20 characters)", spec["chartContent"])
+        self.assertEqual("••• (hidden)", spec["chartContent"])
         self.assertEqual("app", spec["chart"])
         self.assertEqual("https://charts.example.com", spec["repo"])
-        self.assertIn('valuesContent: "••• (hidden, 3 lines)"', chart["yaml"])
-        self.assertEqual({"objectset.rio.cattle.io/applied": f"••• (hidden, {len(APPLIED)} characters)",
-                          "example.com/owner": "••• (hidden, 6 characters)"}, chart["object"]["metadata"]["annotations"])
+        self.assertIn('valuesContent: "••• (hidden, under 10 lines)"', chart["yaml"])
+        self.assertEqual({"objectset.rio.cattle.io/applied": "••• (hidden)",
+                          "example.com/owner": "••• (hidden)"}, chart["object"]["metadata"]["annotations"])
         self.assertEqual(["metadata.annotations.objectset.rio.cattle.io/applied", "metadata.annotations.example.com/owner",
                           "spec.valuesContent", "spec.set", "spec.chartContent"], chart["hidden"])
         backup = self.route("/api/resources/object", "VMBackup", "viewer")
@@ -413,8 +413,8 @@ class TheResourceBrowser(Base):
         widget = self.route("/api/resources/object", "unknown CR", "viewer")
         self.assertEqual({"phase": "Ready"}, widget["object"]["status"])
         self.assertEqual({"app": "w1"}, widget["object"]["metadata"]["labels"])
-        self.assertEqual("••• (hidden: needs the admin role, 3 lines)", widget["object"]["spec"])
-        self.assertIn("spec: \"••• (hidden: needs the admin role, 3 lines)\"", widget["yaml"])
+        self.assertEqual("••• (hidden: needs the admin role, under 10 lines)", widget["object"]["spec"])
+        self.assertIn("spec: \"••• (hidden: needs the admin role, under 10 lines)\"", widget["yaml"])
         rke = self.route("/api/resources/object", "rke machine config", "viewer")["object"]
         self.assertTrue(rke["userData"].startswith(NOTE))
         self.assertTrue(rke["cpuCount"].startswith(NOTE))
@@ -430,10 +430,10 @@ class TheResourceBrowser(Base):
     def test_annotations_are_allowlisted_at_every_depth(self):
         answer = self.route("/api/resources/object", "Deployment annotations", "viewer")
         dep = answer["object"]
-        self.assertEqual({"deployment.kubernetes.io/revision": "3", "example.com/token": "••• (hidden, 12 characters)"},
+        self.assertEqual({"deployment.kubernetes.io/revision": "3", "example.com/token": "••• (hidden)"},
                          dep["metadata"]["annotations"])
         self.assertEqual({"kubectl.kubernetes.io/restartedAt": "2026-10-28T00:00:00Z",
-                          "example.com/pass": "••• (hidden, 7 characters)"},
+                          "example.com/pass": "••• (hidden)"},
                          dep["spec"]["template"]["metadata"]["annotations"])
         self.assertEqual(["metadata.annotations.example.com/token",
                           "spec.template.metadata.annotations.example.com/pass"], answer["hidden"])
@@ -442,9 +442,9 @@ class TheResourceBrowser(Base):
 
     def test_the_helm_controllers_copies_keep_their_shape(self):
         values = self.route("/api/resources/object", "chart-values ConfigMap", "viewer")["object"]
-        self.assertEqual({"values-01_HelmChart.yaml": "••• (hidden, 3 lines)"}, values["data"])
+        self.assertEqual({"values-01_HelmChart.yaml": "••• (hidden, under 10 lines)"}, values["data"])
         content = self.route("/api/resources/object", "chart-content ConfigMap", "viewer")["object"]
-        self.assertEqual({"app.tgz.base64": "••• (hidden, 20 characters)"}, content["binaryData"])
+        self.assertEqual({"app.tgz.base64": "••• (hidden)"}, content["binaryData"])
         pod = self.route("/api/resources/object", "helm-install Pod", "viewer")["object"]
         for container in pod["spec"]["containers"] + pod["spec"]["initContainers"]:
             self.assertEqual(["•••", "•••", "•••"], container["args"])
@@ -463,15 +463,15 @@ class TheResourceBrowser(Base):
         # the fields it knows, so a kind added to the list later stays safe.
         argo = copy.deepcopy(OBJECTS["/apis/argoproj.io/v1alpha1/namespaces/argocd/applications/web"])
         RES.hide_sensitive(argo, "argoproj.io")
-        self.assertEqual({"values": "••• (hidden, 3 lines)", "valuesObject": {"token": "•••"},
-                          "parameters": [{"name": "•••", "value": "•••"}]}, argo["spec"]["sources"][0]["helm"])
+        self.assertEqual({"values": "••• (hidden, under 10 lines)", "valuesObject": {"token": "•••"},
+                          "parameters": ["•••"]}, argo["spec"]["sources"][0]["helm"])
         app = copy.deepcopy(OBJECTS["/apis/catalog.cattle.io/v1/namespaces/lab/apps/web"])
         RES.hide_sensitive(app, "catalog.cattle.io")
         self.assertEqual({"password": "•••"}, app["spec"]["values"])
         self.assertEqual({"token": "•••"}, app["spec"]["chart"]["values"])
         vm = copy.deepcopy(OBJECTS["/apis/kubevirt.io/v1/namespaces/lab/virtualmachines/vm1"])
         RES.hide_sensitive(vm, "kubevirt.io")
-        self.assertEqual({"userData": "••• (hidden, 3 lines)", "networkDataBase64": "••• (hidden, 12 characters)"},
+        self.assertEqual({"userData": "••• (hidden, under 10 lines)", "networkDataBase64": "••• (hidden)"},
                          vm["spec"]["template"]["spec"]["volumes"][1]["cloudInitNoCloud"])
         disk = copy.deepcopy(OBJECTS["/apis/cdi.kubevirt.io/v1beta1/namespaces/lab/datavolumes/disk"])
         RES.hide_sensitive(disk, "cdi.kubevirt.io")
@@ -479,7 +479,7 @@ class TheResourceBrowser(Base):
 
     def test_other_copies_keep_their_shape(self):
         release = self.route("/api/resources/object", "Helm release ConfigMap", "viewer")["object"]
-        self.assertEqual({"release": "••• (hidden, 18 characters)"}, release["data"])
+        self.assertEqual({"release": "••• (hidden)"}, release["data"])
         backup = self.route("/api/resources/object", "Harvester backup", "viewer")["object"]
         self.assertTrue(backup["status"]["secretBackups"].startswith(NOTE))
         raw = copy.deepcopy(OBJECTS[TARGETS["Harvester backup"][0]])
