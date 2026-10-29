@@ -18,6 +18,7 @@ import homestead_outage as O
 import homestead_outage_secret as S
 import homestead_outage_sweep as SWEEP
 from test_outage_secret import Base, Cluster, ITEM, KEY, REAL, SECRETS, VM  # noqa: F401  (Cluster wraps fakes.kube)
+from test_outage_formats import SECRET as TOKEN
 from fakes.kube import Kube
 
 APP_SECRET = "homestead-outage-app-frigate"
@@ -47,6 +48,16 @@ class SweepCase(Base):
         return self.cluster.secret(name) is not None
 
     def sweep(self, now, busy=lambda ns, name: False):
+        """The round at now, after the leader's rounds every EVERY since the last one."""
+        last = getattr(self, "last", None)
+        while last is not None and last + SWEEP.EVERY < now:
+            last += SWEEP.EVERY
+            SWEEP.sweep(busy, now=last)
+        return self.jump(now, busy)
+
+    def jump(self, now, busy=lambda ns, name: False):
+        """Only the round at now: no rounds ran since the last (a gap, or another copy led)."""
+        self.last = now
         return SWEEP.sweep(busy, now=now)
 
     def rounds(self, *times, busy=lambda ns, name: False):
@@ -107,6 +118,18 @@ class KeptTests(SweepCase):
         self.rounds(T0, T0 + SWEEP.GRACE)
         self.assertTrue(self.there("homestead-outage-app-old"))
 
+    def test_two_rounds_far_apart_with_none_between_are_not_enough(self):
+        # This copy lost the lead, or its round stopped, between them: the owner may have
+        # come back and be missing again now for a move. Its clock starts again.
+        self.keep()
+        self.jump(T0)
+        self.jump(T0 + 3 * SWEEP.GRACE)
+        self.assertTrue(self.there(APP_SECRET))
+        self.sweep(T0 + 4 * SWEEP.GRACE - SWEEP.EVERY)
+        self.assertTrue(self.there(APP_SECRET))
+        self.sweep(T0 + 4 * SWEEP.GRACE)
+        self.assertFalse(self.there(APP_SECRET), "an hour of rounds in a row is enough")
+
     def test_a_secret_made_again_starts_its_clock_again(self):
         self.keep()
         self.sweep(T0)
@@ -133,9 +156,36 @@ class SweptTests(SweepCase):
         self.emit.assert_called_once()
         entry = self.emit.call_args.args[0]
         self.assertEqual("outage-secret-swept", entry["event"])
-        self.assertEqual({"ns": "lab", "kind": "Secret", "name": APP_SECRET}, entry["target"])
+        self.assertEqual(("leader", "homestead"), (entry["via"], entry["user"]))
+        self.assertEqual(("DELETE", f"{SECRETS}/{APP_SECRET}"), (entry["method"], entry["path"]))
+        self.assertNotIn("target", entry, "the Timeline links a target to the app of that name: the Secret is none")
         self.assertEqual("app/frigate", entry["for"])
         self.assertNotIn("gotify.example.com", json.dumps(entry))
+
+    def test_no_address_or_token_reaches_the_log_or_the_audit(self):
+        self.keep()
+        with mock.patch("builtins.print") as said:
+            self.rounds(T0, T0 + SWEEP.GRACE)
+        self.assertFalse(self.there(APP_SECRET))
+        written = json.dumps([call.args for call in said.call_args_list + self.emit.call_args_list])
+        self.assertNotIn(TOKEN, written)
+        self.assertNotIn("gotify.example.com", written)
+
+    def test_a_secret_gone_before_the_delete_is_not_reported_as_swept(self):
+        # Deleted meanwhile, by Homestead's own delete of the app say: nothing to log or audit.
+        self.keep()
+        self.sweep(T0)
+        self.sweep(T0 + SWEEP.GRACE - SWEEP.EVERY)
+        self.cluster.kube.fail(f"{SECRETS}/{APP_SECRET}", 404, method="DELETE")
+        result = self.sweep(T0 + SWEEP.GRACE)
+        self.assertEqual([], result["swept"])
+        self.emit.assert_not_called()
+
+    def test_an_owner_of_that_name_in_another_namespace_does_not_keep_it(self):
+        self.cluster.add({"kind": "app", "ns": "other", "name": "frigate"})
+        self.keep()
+        self.rounds(T0, T0 + SWEEP.GRACE)
+        self.assertFalse(self.there(APP_SECRET))
 
     def test_a_long_absent_vms_secret_is_swept(self):
         self.keep(VM)
@@ -185,7 +235,7 @@ class UnreadTests(SweepCase):
     def test_a_failed_app_list_sweeps_nothing(self):
         self.keep()
         self.sweep(T0)
-        self.cluster.kube.fail("/apis/apps/v1/deployments", 500)
+        self.cluster.kube.fail("/apis/apps/v1/deployments", 500, times=1000)
         self.sweep(T0 + SWEEP.GRACE)
         self.assertTrue(self.there(APP_SECRET))
 
@@ -193,7 +243,7 @@ class UnreadTests(SweepCase):
         self.keep()
         self.keep(VM)
         self.sweep(T0)
-        self.cluster.kube.fail("/apis/kubevirt.io/v1/virtualmachines", 500)
+        self.cluster.kube.fail("/apis/kubevirt.io/v1/virtualmachines", 500, times=1000)
         self.sweep(T0 + SWEEP.GRACE)
         self.assertTrue(self.there(APP_SECRET))
         self.assertTrue(self.there(VM_SECRET))
@@ -202,8 +252,8 @@ class UnreadTests(SweepCase):
         self.keep()
         self.sweep(T0)
         self.cluster.kube.fail("/apis/apps/v1/deployments", 500)
+        self.sweep(T0 + SWEEP.EVERY)        # this round's list fails; the next ones are read
         self.sweep(T0 + SWEEP.GRACE)
-        self.sweep(T0 + SWEEP.GRACE + SWEEP.EVERY)
         self.assertTrue(self.there(APP_SECRET), "absence is counted only over lists read in a row")
 
     def test_a_list_cut_short_sweeps_nothing(self):
@@ -226,7 +276,7 @@ class UnreadTests(SweepCase):
     def test_a_failed_secret_list_sweeps_nothing_and_never_raises(self):
         self.keep()
         self.sweep(T0)
-        self.cluster.kube.fail("/api/v1/secrets", 500)
+        self.cluster.kube.fail("/api/v1/secrets", 500, times=1000)
         self.sweep(T0 + SWEEP.GRACE)
         self.assertTrue(self.there(APP_SECRET))
 
@@ -290,6 +340,22 @@ class TickTests(Base):
     def test_a_sweep_that_raises_never_stops_the_round(self):
         _, carry = self.tick(side_effect=RuntimeError("bug"))
         carry.assert_called_once()
+
+    def busy_with(self, *jobs):
+        server = self.server()
+        with mock.patch.object(server.OPS, "snapshot", return_value=list(jobs)):
+            return server.OVERVIEW_ROUTES._busy_owners()
+
+    def test_a_job_still_cancelling_or_waiting_for_recovery_counts_as_busy(self):
+        # A cancelled move puts the app back; a failed one may still be recovered.
+        on = {"namespace": "lab", "name": "frigate"}
+        for job in ({"status": "queued"}, {"status": "cancelling"},
+                    {"status": "failed", "dismissible": False}, {"status": "cancelled", "dismissible": False}):
+            with self.subTest(job=job):
+                self.assertTrue(self.busy_with({**job, "resource": on})("lab", "frigate"))
+        for job in ({"status": "succeeded", "dismissible": True}, {"status": "failed", "dismissible": True}):
+            with self.subTest(job=job):
+                self.assertFalse(self.busy_with({**job, "resource": on})("lab", "frigate"))
 
     def test_a_job_list_that_cannot_be_read_counts_every_owner_busy(self):
         server = self.server()

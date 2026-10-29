@@ -385,14 +385,15 @@ def set_schedule(b):
 
 
 def _busy_owners():
-    """busy(ns, name): whether an app or VM of that name has a job queued or
-    running. When the jobs cannot be read, it raises: nothing is swept."""
+    """busy(ns, name): whether an app or VM of that name has a job not over:
+    queued, running, cancelling, or ended but still to be recovered (not yet
+    dismissible). When the jobs cannot be read, it raises: nothing is swept."""
     try:
         operations, error = OPS.snapshot(), None
     except Exception as failed:
         operations, error = [], failed
     working = {((o.get("resource") or {}).get("namespace"), (o.get("resource") or {}).get("name"))
-               for o in operations if o.get("status") in ("queued", "running")}
+               for o in operations if o.get("status") not in OPS.TERMINAL or not o.get("dismissible", True)}
 
     def busy(ns, name):
         if error is not None:

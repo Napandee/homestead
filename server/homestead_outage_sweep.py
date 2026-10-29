@@ -17,19 +17,20 @@ sure:
   list; a cluster without KubeVirt has no VMs), and the jobs. A round whose
   lists cannot be read sweeps nothing and starts every clock again (#620).
 - Only once the owner has been missing in two rounds at least GRACE apart,
-  with every round in between read too, and the same Secret (uid) each time.
-  A move or a recreate shows the owner again within GRACE, and that clock
-  starts over the next time it is missing.
-- Never while an app or a VM of that namespace and name has a job queued or
-  running, nor while a present app or VM names the Secret on its annotation
-  (a rename, until the leader moves the address under the new name).
+  with every round in between read too (none more than 2 x EVERY apart),
+  and the same Secret (uid) each time. A move or a recreate shows the owner
+  again within GRACE, and that clock starts over the next time it is missing.
+- Never while an app or a VM of that namespace and name has a job not over
+  (queued, running, cancelling, or failed and waiting to be recovered), nor
+  while a present app or VM names the Secret on its annotation (a rename,
+  until the leader moves the address under the new name).
 - The delete names the Secret's uid and resourceVersion as read: one saved
   again meanwhile is not deleted.
 - At most MAX_DELETES a round, one round every EVERY seconds. Each delete is
   logged and written to the audit log (homestead_audit), with no address.
 
-What it remembers is this copy's own: a new leader starts every clock again,
-which only makes a sweep later, never sooner.
+What it remembers is this copy's own. A new leader, or a copy that leads
+again after a gap, starts every clock again: a sweep comes later, never sooner.
 """
 import datetime
 import os
@@ -88,21 +89,27 @@ def _present():
 def _audit(ns, name, owner, missing_for):
     at = datetime.datetime.fromtimestamp(time.time(), datetime.timezone.utc)
     AUDIT.emit({"v": 1, "at": at.isoformat(timespec="milliseconds").replace("+00:00", "Z"),
-                "replica": os.environ.get("HOSTNAME", ""), "via": "leader", "user": "", "role": "",
+                # No "target": the Timeline links one to the app of that name, and a
+                # Secret is no app. Its user reads "homestead DELETE ..." there.
+                "replica": os.environ.get("HOSTNAME", ""), "via": "leader", "user": "homestead",
                 "event": "outage-secret-swept", "method": "DELETE", "path": f"/api/v1/namespaces/{ns}/secrets/{name}",
-                "target": {"ns": ns, "kind": "Secret", "name": name}, "for": owner,
+                "for": owner,
                 "detail": f"its {owner.replace('/', ' ', 1)} was missing for {round(missing_for / 60)} minutes"})
 
 
 def sweep(busy, now=None):
     """One round, on the leader (outage_tick). busy(ns, name) says whether an
-    app or VM of that name has a job queued or running; it may raise when the
+    app or VM of that name has a job not over; it may raise when the
     jobs cannot be read. None when it is not time; else {"swept": ["ns/name"]}.
     Never raises."""
     now = time.time() if now is None else now
     if now < _next.get("at", 0):
         return None
     _next["at"] = now + EVERY
+    if now - _next.get("last", now) > 2 * EVERY:
+        # No round ran between (this copy lost the lead, or its round stopped):
+        # the owner may have come back meanwhile, so every clock starts again.
+        _seen.clear()
     swept = []
     try:
         listed = KUBE.items(SECRETS, read=OUTAGE._bound["kget"])
@@ -120,9 +127,13 @@ def sweep(busy, now=None):
             candidates.append((ns, name, kind, owner_name, meta))
     except Exception as error:
         _seen.clear()           # absence counts only over rounds read in a row (#620)
-        print(f"outage actions: webhook Secrets not checked for a missing app or VM this round "
-              f"({type(error).__name__}); none deleted", flush=True)
+        _next.pop("last", None)
+        if _next.get("said") != type(error).__name__:   # once, and again when it changes
+            _next["said"] = type(error).__name__
+            print(f"outage actions: webhook Secrets not checked for a missing app or VM "
+                  f"({type(error).__name__}); none deleted until they can be", flush=True)
         return {"swept": []}
+    _next.update(last=now, said=None)
     missing = {}
     for ns, name, kind, owner_name, meta in candidates:
         key = (ns, name)
@@ -134,7 +145,7 @@ def sweep(busy, now=None):
             continue
         owner = f"{kind}/{owner_name}"
         try:
-            KUBE.delete_if_present(f"/api/v1/namespaces/{ns}/secrets/{name}",
+            done = KUBE.delete_if_present(f"/api/v1/namespaces/{ns}/secrets/{name}",
                                    {"kind": "DeleteOptions", "apiVersion": "v1",
                                     "preconditions": {"uid": meta.get("uid"),
                                                       "resourceVersion": meta.get("resourceVersion")}},
@@ -144,6 +155,8 @@ def sweep(busy, now=None):
                   f"({type(error).__name__}); tried again next round", flush=True)
             continue
         missing.pop(key)
+        if done is None:
+            continue            # already gone (deleted with its app meanwhile): nothing this did
         swept.append(f"{ns}/{name}")
         print(f"outage actions: deleted Secret {ns}/{name}: its {owner} was missing for "
               f"{round((now - before['first']) / 60)} minutes", flush=True)
