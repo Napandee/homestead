@@ -761,13 +761,19 @@ class CatalogueTests(unittest.TestCase):
             "/api/sources", "/api/sources/browse", "/api/sources/containers", "/api/sources/delete",
             "/api/sources/inspect", "/api/sources/measure", "/api/sources/scan", "/api/sources/trust",
             "/api/sources/vms", "/api/sources/vms/shutdown", "/api/vms/import-unraid", "/api/vms/import-unraid/room",
-            "/api/vm-disks/import", "/api/volumes/chown", "/api/images/cleanup", "/api/images/forget-rollback",
-            "/api/images/scan", "/api/images/vm/delete"),
+            "/api/vm-disks/import"),
             "importing reads another server's files with its credentials, which agents are never given"),
-        **dict.fromkeys(("/api/images/cleanup-unused", "/api/images/cleanup-unused/preview", "/api/vm/isos/delete",
-                         "/api/vm/isos/folders", "/api/vm/isos/keep", "/api/vm/store/auto", "/api/vm/store/forget",
-                         "/api/vm/store/keep", "/api/vm/store/refresh"),
+        "/api/volumes/chown": "rewrites who owns a volume's files; agents are never given a volume's files",
+        **dict.fromkeys(("/api/images/cleanup", "/api/images/forget-rollback", "/api/images/scan",
+                         "/api/images/vm/delete", "/api/images/cleanup-unused", "/api/images/cleanup-unused/preview",
+                         "/api/vm/isos/delete", "/api/vm/isos/folders", "/api/vm/isos/keep", "/api/vm/store/auto",
+                         "/api/vm/store/forget", "/api/vm/store/keep", "/api/vm/store/refresh"),
                         "image and ISO housekeeping on the hosts is a person's; delete_vm removes a VM"),
+        # From open PRs (#885 alert formats, #888 one-host copies): kept here so
+        # the combined suite stays green whichever merges first.
+        **dict.fromkeys(("/api/alerts/webhook", "/api/alerts/webhook/test"),
+                        "where alerts go, and the webhook's secret, is a person's call"),
+        "/api/longhorn/one-host-copies": "the cluster's own footing (storage setup) is set up by a person",
         **dict.fromkeys(("/api/shares", "/api/shares/delete", "/api/shares/edit", "/api/shares/nfs",
                          "/api/shares/repair", "/api/shares/users", "/api/shares/users/delete"),
                         "file shares and their users hold passwords, which agents are never given"),
@@ -779,8 +785,10 @@ class CatalogueTests(unittest.TestCase):
                          "/api/operations/resume", "/api/operations/storage-recovery/act",
                          "/api/operations/storage-recovery/preview", "/api/operations/vm-recovery/preview",
                          "/api/operations/vm-recovery/resolve", "/api/statefulset/restart-elsewhere",
-                         "/api/restore-swap", "/api/volumes/previous/swap-back", "/api/restore-tests/run"),
+                         "/api/restore-swap", "/api/volumes/previous/swap-back"),
                         "recovery after a failure is a person's judgement; restore_backup restores a backup"),
+        "/api/restore-tests/run": "a test restore runs on the restore-test schedule an admin set; a held tool "
+                                  "for it is on the wrap-up list",
         **dict.fromkeys(("/api/image-updates/channel", "/api/restore-tests/settings", "/api/weekly-trim/settings",
                          "/api/volumes/previous/settings", "/api/portal", "/api/homestead/data/tidy",
                          "/api/setup/https-check", "/api/setup/opened", "/api/welcome/done"),
@@ -789,14 +797,21 @@ class CatalogueTests(unittest.TestCase):
 
     def test_every_admin_action_is_a_held_tool_or_kept_from_agents_on_purpose(self):
         """A new admin route fails this until a tool reaches it (held for an
-        admin's approval, below), or it is listed above with the reason it is not."""
+        admin's approval, below), or it is listed above with the reason it is not.
+        It sees the routes modules declare (homestead_routes); server.py's own
+        admin POST policy entries are for GET-only routes today. A tool counts by
+        the path it names, so a GET of an admin POST path would count too."""
         used = {path for _, path in self.routes()}
-        admin = sorted(r.path for r in ROUTER.table().values() if r.method != "GET" and r.role == "admin")
+        table = ROUTER.table().values()
+        admin = sorted(r.path for r in table if r.method != "GET" and r.role == "admin")
         missing = [p for p in admin if p not in used and p not in self.ADMIN_UI_ONLY
                    and not any(p == n or p.startswith(n + "/") for n in self.NEVER)]
         self.assertEqual([], missing, "make these agent tools held for approval, or say in ADMIN_UI_ONLY why they are not")
         self.assertEqual([], sorted(p for p in self.ADMIN_UI_ONLY if p in used), "a tool reaches these: drop them from ADMIN_UI_ONLY")
-        self.assertEqual([], sorted(p for p in self.ADMIN_UI_ONLY if p not in admin), "not an admin route that changes something")
+        # A path no module declares yet is allowed: an open PR adds it.
+        declared = {r.path for r in table}
+        self.assertEqual([], sorted(p for p in self.ADMIN_UI_ONLY if p in declared and p not in admin),
+                         "not an admin route that changes something")
 
     def test_an_agent_reaching_an_admin_route_waits_for_an_admin(self):
         """An agent's key is at most operator, so every admin route a tool
@@ -873,6 +888,17 @@ class ServerDoorTests(unittest.TestCase):
         with mock.patch.object(server.API_KEYS, "verify", return_value=k):
             self.assertIsNone(h._guard("/mcp"))
         self.assertEqual(("api-key:claude", "operator"), (h.user, h.role))
+
+    def test_a_key_an_admin_made_with_every_scope_is_still_only_an_operator(self):
+        """What holds every admin route a tool names for an admin's approval
+        (CatalogueTests): an agent's key never carries the admin role."""
+        import homestead_api_keys as KEYS
+        h, server = self.handler("/mcp", headers={"Authorization": "Bearer hsk_x"})
+        k = {"id": "1", "name": "claude", "owner": "ada", "scopes": sorted(KEYS.SCOPES), "expires": 9, "mcp": True}
+        self.assertIn("admin", {role for role, _ in KEYS.SCOPES.values()})
+        with mock.patch.object(server.API_KEYS, "verify", return_value=k):
+            self.assertIsNone(h._guard("/mcp"))
+        self.assertEqual("operator", h.role)
 
     def test_a_session_cookie_alone_never_reaches_mcp(self):
         """Signed in as an admin, with or without the app's CSRF header: no

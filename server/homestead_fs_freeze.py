@@ -117,6 +117,8 @@ def _row(volume, enabled, modes):
     on = mode == "enabled" or (mode not in ("enabled", "disabled") and bool(enabled))
     # Longhorn only syncs a volume nothing mounts; it freezes once an app uses it.
     # Only "attached" counts: creating, attaching and detaching are not attached.
+    # (Longhorn also attaches an idle volume briefly for its own backup or
+    # rebuild; the row says "freezes" for that moment.)
     attached = (volume.get("status") or {}).get("state") == "attached"
     # What a snapshot of it does once it is set to freeze, whatever it is set to now.
     if engine == "v2":
