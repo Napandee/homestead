@@ -658,8 +658,8 @@ window.volumeDeleteConfirmationValid = volumeDeleteConfirmationValid;
 function releasedBesideCurrent(p) {
   const pv = p.pv || {}, now = p.current || {}, mono = v => `<span class="mono">${esc(v || "—")}</span>`;
   const users = (now.consumers || []).map(c => `${esc(c.kind)} · ${esc(c.name)}`).join("<br>") || '<span class="dim">nothing</span>';
-  return UI.section(`The claim name ${esc(p.namespace)}/${esc(p.name)} is in use again`, UI.table(
-    [{ label: "" }, { label: "This Released volume" }, { label: "The volume the claim uses now" }], [
+  return UI.section(`${esc(p.namespace)}/${esc(p.name)} is in use again`, UI.table(
+    [{ label: "" }, { label: "Released" }, { label: "In use now" }], [
       ["Persistent volume", mono(pv.name), mono(now.pv)],
       ["Its UID", mono(pv.uid), mono(now.pv_uid)],
       ["Phase", esc(pv.phase || "?"), esc(now.phase || "?")],
@@ -709,7 +709,7 @@ window.volumeDelete = async x => {
     blocked
       ? UI.callout("bad", "Deletion is blocked.", `<ul class="ui-list">${p.blocking_reasons.map(r => `<li>${esc(r)}</li>`).join("")}</ul>${incomplete}`)
       : incomplete ? UI.callout("warn", "Impact check passed, with gaps.", incomplete)
-      : UI.callout("ok", "Impact check passed.", p.released ? `This Released volume is not the one the claim ${esc(p.name)} uses now. Deleting it removes its data; the volume in use is not changed.`
+      : UI.callout("ok", "Impact check passed.", p.released ? `This is not the volume ${esc(p.name)} uses now; that one is not changed.`
         : p.orphan ? "The PVC is already gone. This retained backing volume is detached; deleting it permanently removes its remaining data."
         : "This claim is detached and has no active app or VM references. Choose what should happen to its backing data."),
     p.released ? releasedBesideCurrent(p) : "",
