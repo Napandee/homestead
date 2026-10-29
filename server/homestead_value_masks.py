@@ -1,51 +1,42 @@
 """What a role below the one that may reveal a Secret is shown of values that
 can carry a credential outside a Secret.
 
-- An address's user and password (https://user:pass@host) and the values of
-  parameters named like a credential (?token=..., #access_token=...,
-  ;SharedAccessKey=...) become "•••", wherever the address sits in a text: a
-  chart's repository, a webhook's URL, an environment value, an argument.
-  Each address is parsed (urllib.parse.urlsplit), and anything that does not
-  parse cleanly, or a text too long to check, is hidden whole: when in doubt
-  this hides more, never less.
+- An address (a "URL token": a scheme, "://" - or ":/" or ":\\", which
+  other parsers accept - and everything up to the next ASCII whitespace)
+  that holds "@", "=", "%" or ";", or a word a credential goes by, is
+  replaced whole by "scheme://•••". Nothing is parsed and nothing is masked
+  in part: a rule this simple cannot be read differently from the way a
+  client reads the address, and a viewer sees less, never more. An address
+  without any of those (https://charts.example.com/stable) is shown as it is.
+- A text longer than MAX_TEXT that holds an address is hidden whole.
 - The Helm controller's install and delete pods run `helm` with the chart's
   values, and a chart may print them, so their logs go only to that role.
 
 The role is the one GET /api/resources/reveal declares, read from the route
-table so the two cannot drift apart."""
+table so the two cannot drift apart. Everything here is linear in the
+length of the text: anyone who can set an annotation or cause an event
+writes it."""
 import copy
 import re
-import urllib.parse
 
 HIDDEN = "•••"
 REVEAL = ("GET", "/api/resources/reveal")
-# The text is written by anyone who can set an annotation or cause an event,
-# so finding addresses is one bounded regex and the rest is linear parsing.
-# An address: a scheme of at most 32 characters, ":" and one or two slashes
-# or backslashes (parsers other than Python's accept "https:/" and
-# "https:\\"), then everything up to whitespace, '"' or an angle bracket
-# (none of which an address may hold unencoded; "'" it may).
-ADDRESS = re.compile(r"(?i)[a-z][a-z0-9+.-]{0,31}:[\\/]{1,2}[^\s\"<>]*")
-# One closing mark right at an address's end belongs to the text around it.
-CLOSERS = ")]},'"
-# What may end an address cleanly; anything else ('"', "<", ">", a space
-# other than these) may have cut it short.
-CLEAN_END = " \t\r\n"
-SPACE = re.compile(r"[ \t\r\n]")
+# ASCII whitespace: the only thing that ends a URL token.
+SPACE = " \t\r\n\f\v"
+SPACES = re.compile(r"[ \t\r\n\f\v]+")
+# A URL token: a scheme of at most 32 characters (each start is tried in
+# bounded time), ":" and one or two slashes or backslashes, then everything
+# up to ASCII whitespace or the end of the text.
+TOKEN = re.compile(r"(?i)[a-z][a-z0-9+.-]{0,31}:[\\/]{1,2}[^ \t\r\n\f\v]*")
+# What makes a token hidden: a login ("@"), a parameter ("=", ";"), anything
+# encoded ("%"), or a word a credential goes by (tokens, keys, passwords,
+# signatures, sessions; a harmless word hidden too is the safe side).
+MARKS = "@=%;"
+SECRET_WORD = re.compile(r"pass|pwd|secret|token|sig|credential|auth|session|jwt|bearer|cookie|private|hmac|otp|"
+                         r"ticket|apikey|api-key|api_key|access-key|access_key", re.I)
 # A longer text holding an address is hidden whole rather than checked.
 MAX_TEXT = 256 * 1024
 TOO_LONG = f"{HIDDEN} (hidden: too long to check for credentials)"
-# An address inside an address's path (not a parameter) is checked once more;
-# one nested deeper still is hidden whole.
-MAX_DEPTH = 1
-# Names a credential goes by: tokens, keys, passwords, signatures (S3's
-# X-Amz-Signature and X-Amz-Credential, Azure's sig and SharedAccessKey),
-# sessions. Matched on the decoded name, whatever characters it holds.
-# Hiding a harmless one too is the safe side.
-SECRET_PARAM = re.compile(r"pass|^pw$|pwd|secret|token|sig|credential|auth|session|jwt|bearer|cookie|private|"
-                          r"hmac|otp|ticket|key$|^code$", re.I)
-# A name's array suffix (key[], code[0]) and spaces, dropped before matching.
-NAME_NOISE = re.compile(r"\[[^\]]*\]|\s")
 # The k3s and RKE2 Helm controller: its Job's pods carry the chart's label,
 # and the Jobs are named for what they do. Rancher runs helm in
 # cattle-system's helm-operation-* pods.
@@ -64,129 +55,34 @@ def sees_values(role):
     return AUTH.allows(role, reveal_role())
 
 
-def _secret_name(name):
-    """A parameter's name, decoded (up to three times, as a server that
-    decodes again would read it) and without an array suffix or spaces,
-    looks like a credential's."""
-    for _ in range(3):
-        plain = urllib.parse.unquote_plus(name)
-        if plain == name:
-            break
-        name = plain
-    return bool(SECRET_PARAM.search(NAME_NOISE.sub("", name)))
+def _hidden(token):
+    return any(mark in token for mark in MARKS) or bool(SECRET_WORD.search(token))
 
 
-def _encoded(text):
-    """Text that, decoded once, holds another address (or one still encoded)
-    or a credential's name."""
-    if "%" not in text and "+" not in text:
-        return False
-    plain = urllib.parse.unquote_plus(text)
-    return "://" in plain or "%3a%2f%2f" in plain.lower() or bool(SECRET_PARAM.search(plain))
+def _masked(token):
+    return token.partition(":")[0] + "://" + HIDDEN
 
 
-def _value_hidden(name, value):
-    """Whether a parameter's value is hidden: its name says it is a
-    credential, or the value is (or, decoded once, holds) another address or
-    a credential's name."""
-    return _secret_name(name) or _encoded(name) or "://" in value or _encoded(value)
-
-
-def _pairs(text, separators, nested=False):
-    """Pieces split on separators, every byte kept as written except: a
-    name=value piece's value when _value_hidden, and a piece without a value
-    that holds an encoded address or credential name. With nested (a query
-    or fragment), any piece holding another address is hidden whole too:
-    what cannot be fully understood is hidden."""
-    out = []
-    for piece in re.split(f"([{re.escape(separators)}])", text):
-        name, eq, value = piece.partition("=")
-        if piece == HIDDEN or (len(piece) == 1 and piece in separators):
-            pass
-        elif eq and value and value != HIDDEN and _value_hidden(name, value):
-            piece = f"{name}={HIDDEN}"
-        elif (nested and "://" in piece) or (not (eq and value) and _encoded(piece)):
-            piece = HIDDEN
-        out.append(piece)
-    return "".join(out)
-
-
-def _address(url, depth):
-    """One address with its user, password and credential values hidden; the
-    whole address, if it does not parse cleanly."""
-    scheme, _, rest = url.partition(":")
-    if not rest.startswith("//") or rest[2:3] in ("/", "\\"):
-        # "https:/", "https:\\" or "https:///": other parsers read a login
-        # there that urlsplit would not. Hidden if it could hold one.
-        return f"{scheme}://{HIDDEN}" if any(c in rest for c in "@=%") else url
-    rest = rest[2:]
-    try:
-        parts = urllib.parse.urlsplit(url)
-        parts.port  # noqa: B018  (raises on a malformed port)
-    except ValueError:
-        return f"{scheme}://{HIDDEN}"
-    # The same split urlsplit makes, kept as written (urlunsplit would drop
-    # an empty "?" or "#" and so change the text).
-    netloc_end = min([i for i in (rest.find("/"), rest.find("?"), rest.find("#")) if i >= 0] or [len(rest)])
-    netloc, tail = rest[:netloc_end], rest[netloc_end:]
-    tail, hash_, fragment = tail.partition("#")
-    path, question, query = tail.partition("?")
-    if netloc != parts.netloc:
-        return f"{scheme}://{HIDDEN}"
-    if "@" in netloc:
-        netloc = HIDDEN + "@" + netloc.rpartition("@")[2]
-    if "://" in path:
-        if depth >= MAX_DEPTH:
-            return f"{scheme}://{HIDDEN}"
-        path = _strip(path, depth + 1)
-    path = _pairs(path, "/;")
-    if question:
-        query = _pairs(query, "&;", nested=True)
-    if hash_:
-        fragment = _pairs(fragment, "&;", nested=True)
-    return f"{scheme}://{netloc}{path}{question}{query}{hash_}{fragment}"
-
-
-def _strip(text, depth):
-    out, pos = [], 0
-    # The next space and the next "@", found once and reused while ahead,
-    # so many short addresses in one long stretch stay linear.
-    next_space, next_at = -1, -1
-    for found in ADDRESS.finditer(text):
-        start, end = found.span()
-        if start < pos:
-            continue            # inside a stretch already hidden
-        scheme = found.group(0).partition(":")[0]
-        stopped = end < len(text) and text[end] not in CLEAN_END
-        if end - start > len(scheme) + 3 and text[end - 1] in CLOSERS:
-            end -= 1
-        original = text[start:end]
-        address = _address(original, depth)
-        if stopped:
-            # Cut short by a character no address holds unencoded: if
-            # anything was hidden, or an "@" follows, what follows up to the
-            # next space may be the rest of a login or value: hidden too.
-            if next_space < found.end():
-                space = SPACE.search(text, found.end())
-                next_space = space.start() if space else len(text)
-            if next_at < found.end():
-                next_at = text.find("@", found.end())
-                next_at = len(text) + 1 if next_at < 0 else next_at
-            if address != original or next_at < next_space:
-                address, end = f"{scheme}://{HIDDEN}", next_space
-        out += [text[pos:start], address]
-        pos = end
-    return "".join(out) + text[pos:]
+def strip_url_secrets(text):
+    """text with every URL token that could carry a credential replaced
+    whole by "scheme://•••"; a text over MAX_TEXT holding one is hidden
+    whole. Stripping twice changes nothing."""
+    if not isinstance(text, str) or (":/" not in text and ":\\" not in text):
+        return text
+    if len(text) > MAX_TEXT:
+        return TOO_LONG
+    return TOKEN.sub(lambda found: _masked(found.group(0)) if _hidden(found.group(0)) else found.group(0), text)
 
 
 def cut(text, length, mark="…"):
-    """text shortened to length characters, never inside an address: one
-    that would be cut goes whole, so no login is left without its "@" and
-    no value without its end, which a later strip could not recognise."""
+    """text shortened to length characters, never inside a URL token: one
+    that would be cut goes whole. Tokens end only at ASCII whitespace, so a
+    cut text holds whole tokens of the full text, and masking it gives the
+    same as masking first and cutting after."""
     text = str(text or "")
     if len(text) <= length:
         return text
-    for found in ADDRESS.finditer(text):
+    for found in TOKEN.finditer(text):
         if found.start() >= length:
             break
         if found.end() > length:
@@ -194,16 +90,11 @@ def cut(text, length, mark="…"):
     return text[:length]
 
 
-def strip_url_secrets(text):
-    """text with each address's user, password and credential-like parameter
-    values replaced by HIDDEN; a text over MAX_TEXT holding an address is
-    hidden whole. Stripping twice changes nothing, and the time it takes is
-    linear in the text's length."""
-    if not isinstance(text, str) or (":/" not in text and ":\\" not in text):
-        return text
-    if len(text) > MAX_TEXT:
-        return TOO_LONG
-    return _strip(text, 0)
+def squeeze(text):
+    """Runs of ASCII whitespace as one space. Only ASCII whitespace ends a
+    URL token, so this never joins or splits one: masking before or after
+    gives the same."""
+    return SPACES.sub(" ", str(text or "")).strip(SPACE)
 
 
 def strip_in_place(node, at=""):
@@ -223,25 +114,14 @@ def strip_in_place(node, at=""):
 
 
 def has_stripped(value):
-    """Whether a value holds what strip_url_secrets puts in (an address's
-    "://•••", a parameter's "=•••", a "••• (hidden" note): saved back, it
-    would replace the real credential with the mask."""
+    """Whether a value holds what strip_url_secrets puts in ("scheme://•••"
+    or the too-long note): saved back, it would replace the real credential
+    with the mask."""
     if isinstance(value, dict):
         return any(has_stripped(item) for item in value.values())
     if isinstance(value, list):
         return any(has_stripped(item) for item in value)
-    if not isinstance(value, str):
-        return False
-    if HIDDEN + " (hidden" in value:
-        return True
-    # The mask where strip_url_secrets puts one: after a separator or a
-    # name, or before the host it hides the login of.
-    at = value.find(HIDDEN)
-    while at >= 0:
-        if (at and value[at - 1] in "/?#&;=") or value.startswith("@", at + len(HIDDEN)):
-            return True
-        at = value.find(HIDDEN, at + 1)
-    return False
+    return isinstance(value, str) and ("://" + HIDDEN in value or TOO_LONG in value)
 
 
 def helm_job_pod(pod):

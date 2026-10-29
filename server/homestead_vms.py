@@ -146,7 +146,7 @@ def _problem(vm, vmi, instance_known=True):
     Synchronized are False. A stopped VM's Ready says only that it has no
     instance, which is not a problem."""
     conditions = ((vm.get("status") or {}).get("conditions") or []) + ((vmi.get("status") or {}).get("conditions") or [])
-    text = lambda c: MASKS.cut(" ".join(str(c.get("message") or c.get("reason") or "").split()), 300)
+    text = lambda c: MASKS.cut(MASKS.squeeze(c.get("message") or c.get("reason") or ""), 300)
     for condition in conditions:
         if condition.get("type") == "Failure" and condition.get("status") == "True" and text(condition):
             message = text(condition)

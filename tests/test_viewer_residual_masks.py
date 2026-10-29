@@ -223,17 +223,20 @@ class Sizes(Base):
 
 class Urls(Base):
     def test_strip(self):
+        # Deliberately simple: a URL token (up to ASCII whitespace) holding "@", "=", "%", ";" or a
+        # credential word is replaced whole. Viewers see less than before, never more.
         strip = MASKS.strip_url_secrets
         cases = {
-            "https://deploy:hunter2@charts.example.com/stable": "https://•••@charts.example.com/stable",
-            "oci://robot@registry.example.com/charts": "oci://•••@registry.example.com/charts",
-            "https://x.example.com/a?token=abc&page=2#top": "https://x.example.com/a?token=•••&page=2#top",
-            "https://x.example.com/a?X-Amz-Signature=abc&X-Amz-Credential=def": "https://x.example.com/a?X-Amz-Signature=•••&X-Amz-Credential=•••",
-            "see https://u:p@a.example.com and git://b.example.com?api_key=k1": "see https://•••@a.example.com and git://b.example.com?api_key=•••",
-            "--repo=https://u:p@h.example.com/x?sig=1&password=2&pwd=3&client_secret=4&access_token=5":
-                "--repo=https://•••@h.example.com/x?sig=•••&password=•••&pwd=•••&client_secret=•••&access_token=•••",
-            "https://example.com/start?page=2": "https://example.com/start?page=2",
-            "https://example.com/path@v1/file": "https://example.com/path@v1/file",
+            "https://deploy:hunter2@charts.example.com/stable": "https://•••",
+            "oci://robot@registry.example.com/charts": "oci://•••",
+            "https://x.example.com/a?token=abc&page=2#top": "https://•••",
+            "https://x.example.com/a?X-Amz-Signature=abc&X-Amz-Credential=def": "https://•••",
+            "see https://u:p@a.example.com and git://b.example.com?api_key=k1": "see https://••• and git://•••",
+            "--repo=https://u:p@h.example.com/x?sig=1&password=2": "--repo=https://•••",
+            "https://example.com/start?page=2": "https://•••",
+            "https://example.com/path@v1/file": "https://•••",
+            "https://charts.example.com/stable": "https://charts.example.com/stable",
+            "https://example.com/token/abc": "https://•••",
             "user@example.com and a?token=x without a URL": "user@example.com and a?token=x without a URL",
             "": "",
         }
@@ -243,14 +246,14 @@ class Urls(Base):
 
     def test_a_viewer_sees_urls_without_credentials(self):
         chart = self.get(PRIVATE, "viewer")["object"]["spec"]
-        self.assertEqual("https://•••@charts.example.com/stable", chart["repo"])
-        self.assertEqual("https://charts.example.com/app-1.0.tgz?token=•••&arch=amd64", chart["chart"])
+        self.assertEqual("https://•••", chart["repo"])
+        self.assertEqual("https://•••", chart["chart"])
         api = self.get(API, "viewer")["object"]["spec"]["template"]["spec"]["containers"][0]
-        self.assertEqual(["--notify=https://hooks.example.com/post?sig=•••&room=ops"], api["args"])
-        self.assertEqual("postgres://•••@db.example.com:5432/app", api["env"][0]["value"])
-        self.assertEqual("https://example.com/start?page=2", api["env"][1]["value"])
+        self.assertEqual(["--notify=https://•••"], api["args"])
+        self.assertEqual("postgres://•••", api["env"][0]["value"])
+        self.assertEqual("https://•••", api["env"][1]["value"], "a query is enough to hide it")
         hook = self.get(WEBHOOK, "viewer")["object"]["webhooks"][0]["clientConfig"]["url"]
-        self.assertEqual("https://hook.example.com/mutate?api_key=•••&X-Amz-Signature=•••", hook)
+        self.assertEqual("https://•••", hook)
         for path in (PRIVATE, API, WEBHOOK):
             answer = self.get(path, "viewer")
             self.assertHidden(answer)
@@ -268,18 +271,18 @@ class Urls(Base):
         with mock.patch.object(RES, "table_get", lambda path: copy.deepcopy(table)):
             viewer = self.get(PRIVATE, "viewer", "/api/resources/list")
             admin = self.get(PRIVATE, "admin", "/api/resources/list")
-        self.assertEqual("https://•••@charts.example.com/stable", viewer["rows"][0]["cells"][1])
+        self.assertEqual("https://•••", viewer["rows"][0]["cells"][1])
         self.assertHidden(viewer)
         self.assertEqual("https://deploy:hunter2@charts.example.com/stable", admin["rows"][0]["cells"][1])
 
     def test_saving_or_creating_a_copy_with_a_stripped_url_is_refused(self):
         group, version, resource, ns, name = _path_parts(DBURL)
         viewer = self.get(DBURL, "viewer")
-        self.assertEqual("postgres://•••@db.example.com:5432/app",
+        self.assertEqual("postgres://•••",
                          viewer["object"]["spec"]["template"]["spec"]["containers"][0]["env"][0]["value"])
         with self.assertRaisesRegex(ValueError, "hidden"):
             RES.save_object(group, version, resource, ns, name, viewer["yaml"])
-        annotation_only = self.get(DBURL, "admin")["yaml"].replace("token=s3cr3t-t0ken", "token=•••")
+        annotation_only = self.get(DBURL, "admin")["yaml"].replace("https://images.example.com/d.img?token=s3cr3t-t0ken", "https://•••")
         with self.assertRaisesRegex(ValueError, "hidden"):
             RES.save_object(group, version, resource, ns, name, annotation_only)
         with self.assertRaisesRegex(ValueError, "hidden"):
@@ -302,8 +305,8 @@ class Urls(Base):
                 mock.patch.object(HELM, "helmcharts", return_value=[chart]):
             public = HELM.release("lab", "demo", include_sensitive=False)
             private = HELM.release("lab", "demo", include_sensitive=True)
-        self.assertEqual("https://•••@charts.example.com", public["source"]["repo"])
-        self.assertEqual("https://charts.example.com/d.tgz?token=•••", public["source"]["chart"])
+        self.assertEqual("https://•••", public["source"]["repo"])
+        self.assertEqual("https://•••", public["source"]["chart"])
         self.assertHidden(public)
         self.assertEqual(chart["spec"]["repo"], private["source"]["repo"])
         self.assertEqual(chart["spec"]["chart"], private["source"]["chart"])
@@ -429,118 +432,53 @@ RANCHER_POD = {"apiVersion": "v1", "kind": "Pod",
                "metadata": {"name": "helm-operation-abcde", "namespace": "cattle-system", "uid": "p4"},
                "spec": {"containers": [{"name": "helm"}]}, "status": {"phase": "Succeeded"}}
 
+# Forms the reviews found in earlier, finer-grained masks; each must leave no credential.
+REVIEW_FORMS = {
+    "https://proxy.example.com/?next=https://u:pw@b.example.com/": "pw@",
+    "https://proxy.example.com/?next=https%3A%2F%2Fu%3Apw%40b.example.com%2F": "pw",
+    "https://app.example.com/cb#access_token=abc123&x=1": "abc123",
+    "Endpoint=sb://ns.example.com/;SharedAccessKeyName=r;SharedAccessKey=abc=": "abc=",
+    "https://user:p@ss@host.example.com/x": "p@ss",
+    "see (https://h.example.com/?token=abc), then": "abc",
+    "https://h.example.com/?token=ab)c]d}e&x=1": "ab)",
+    "https://u:12'cdef@h.example.com/x": "cdef",
+    'https://u:ab"cdef@h.example.com/x': "cdef",
+    "https://u:ab\u00a0cdef@h.example.com/x": "cdef",
+    'https://h.example.com/?a=1"&token=SECRET': "SECRET",
+    "https://h.example.com/?a=1\u00a0&token=SECRET": "SECRET",
+    "https://h.example.com/p<x;sig=SECRET": "SECRET",
+    "https://h.example.com/fetch/https%3A%2F%2Fuser%3Asecret%40example.com/x": "secret",
+    "https://h.example.com/?https://u:p@h2": "u:p",
+    "https://h.example.com/#https://u:p@h2": "u:p",
+    "https://h.example.com/?a=1&https://u:p@h2": "u:p",
+    "https://h.example.com/r/https:/u:p@evil.example.com": "u:p",
+    "https://h\\a;SharedAccessKey=SECRET": "SECRET",
+    "https://h.example.com/?key%5B%5D=SECRET&code[]=SECRET": "SECRET",
+    "https://h.example.com/?hmac=SECRET&otp=SECRET&ticket=SECRET": "SECRET",
+    "https://h.example.com/?%2574oken=SECRET": "SECRET",
+    "https:\\\\user:pass@h.example.com/x": "pass",
+    "https:/user:pass@h.example.com/x": "pass",
+    "https://h.example.com/?next=https%25253A%25252F%25252Fu%25253Ap%252540e": "u%",
+}
+
 
 class ReviewStrip(unittest.TestCase):
-    def test_more_forms_of_credentials_in_addresses(self):
+    def test_every_form_the_reviews_found_leaves_no_credential(self):
         strip = MASKS.strip_url_secrets
-        cases = {
-            # An address inside another's query, as written and encoded,
-            # is hidden whole.
-            "https://proxy.example.com/?next=https://u:pw@b.example.com/":
-                "https://proxy.example.com/?next=•••",
-            "https://proxy.example.com/?next=https%3A%2F%2Fu%3Apw%40b.example.com%2F":
-                "https://proxy.example.com/?next=•••",
-            # A token in the fragment (OAuth's implicit flow).
-            "https://app.example.com/cb#access_token=abc123&x=1": "https://app.example.com/cb#access_token=•••&x=1",
-            # Azure's ;Name=Value form, and other key names.
-            "Endpoint=sb://ns.example.com/;SharedAccessKeyName=r;SharedAccessKey=abc=":
-                "Endpoint=sb://ns.example.com/;SharedAccessKeyName=r;SharedAccessKey=•••",
-            "https://h.example.com/?accesskey=a&sharedkey=b&pw=c&page=2":
-                "https://h.example.com/?accesskey=•••&sharedkey=•••&pw=•••&page=2",
-            # A password with an unencoded "@": everything up to the last one.
-            "https://user:p@ss@host.example.com/x": "https://•••@host.example.com/x",
-            # Punctuation around an address stays.
-            "[https://h.example.com/?token=abc]": "[https://h.example.com/?token=•••]",
-            # One closing mark at the very end is not the address; a value
-            # runs to its real end, so a secret holding ")" is all hidden.
-            "see (https://h.example.com/?token=abc) then": "see (https://h.example.com/?token=•••) then",
-            "see (https://h.example.com/?token=abc), then": "see (https://h.example.com/?token=•••, then",
-            "https://h.example.com/?token=ab)c]d}e&x=1": "https://h.example.com/?token=•••&x=1",
-            "https://h.example.com/?token=ab)": "https://h.example.com/?token=•••)",
-        }
-        for given, wanted in cases.items():
-            self.assertEqual(wanted, strip(given), given)
-            self.assertEqual(wanted, strip(strip(given)), given)
-            self.assertTrue(MASKS.has_stripped(strip(given)), given)
-
-    def test_third_review_forms_leave_no_credential(self):
-        strip = MASKS.strip_url_secrets
-        leaks = {
-            # A "'" is legal in a login or a value; '"', "<", ">" and other spaces are not, so
-            # an address they cut short with something hidden or an "@" after is hidden to the next space.
-            "https://u:12'cdef@h.example.com/x": "12'cdef",
-            "https://u:ab'cdef@h.example.com/x": "cdef",
-            "https://h.example.com/?token=ab'cdef": "cdef",
-            'https://u:ab"cdef@h.example.com/x': "cdef",
-            "https://u:ab\u00a0cdef@h.example.com/x": "cdef",
-            "https://h.example.com/?token=ab\"cdef more": "cdef",
-            # Encoded addresses in a path segment, a bare query piece and a fragment.
-            "https://h.example.com/fetch/https%3A%2F%2Fuser%3Asecret%40example.com/x": "secret",
-            "https://h.example.com/?https%3A%2F%2Fuser%3Asecret%40example.com": "secret",
-            "https://h.example.com/#https%3A%2F%2Fuser%3Asecret%40example.com": "secret",
-            # Names with a suffix, other credential names, a name encoded twice.
-            "https://h.example.com/?key%5B%5D=SECRET1&code[]=SECRET2&key%20=SECRET3": "SECRET",
-            "https://h.example.com/?hmac=SECRET1&otp=SECRET2&ticket=SECRET3": "SECRET",
-            "https://h.example.com/?%2574oken=SECRET": "SECRET",
-            # Separators other parsers accept.
-            "https:\\\\user:pass@h.example.com/x": "pass",
-            "https:/user:pass@h.example.com/x": "pass",
-        }
-        for given, secret in leaks.items():
+        for given, secret in REVIEW_FORMS.items():
             with self.subTest(given=given):
                 once = strip(given)
                 self.assertNotIn(secret, once)
                 self.assertEqual(once, strip(once))
                 self.assertTrue(MASKS.has_stripped(once))
-        # JSON around an address with nothing to hide stays as it is.
-        self.assertEqual('{"url":"https://h.example.com/x","n":1}', strip('{"url":"https://h.example.com/x","n":1}'))
-        self.assertEqual("C:\\Users\\x", strip("C:\\Users\\x"))
 
-    def test_a_message_is_never_cut_inside_an_address(self):
-        cut = MASKS.cut
-        self.assertEqual("failed: …", cut("failed: https://user:1234@h.example.com/x", 20))
-        self.assertEqual("short", cut("short", 20))
-        self.assertEqual("x" * 20, cut("x" * 30, 20))
-        event = {"apiVersion": "v1", "kind": "Event", "metadata": {"name": "e", "namespace": "lab"},
-                 "involvedObject": {"name": "disk"}, "message": "x" * 380 + " https://user:1234@h.example.com/x",
-                 "lastTimestamp": "2026-10-28T00:00:00Z"}
-        with mock.patch.object(RES, "kget", lambda path: {"items": [copy.deepcopy(event)]}):
-            self.assertNotIn("1234", RES.events_for("lab", "disk")[0]["message"])
-
-    def test_an_address_anywhere_in_a_query_or_fragment_is_hidden(self):
-        strip = MASKS.strip_url_secrets
-        for given in ("https://h/?https://u:p@h2", "https://h/#https://u:p@h2", "https://h/?a=1&https://u:p@h2",
-                      "https://h/?https://u:p@h2=", "https://h/#x=1&https://u:p@h2", "https://h/?a=1;https://u:p@h2"):
-            with self.subTest(given=given):
-                once = strip(given)
-                self.assertNotIn("u:p", once)
-                self.assertEqual(once, strip(once))
-                self.assertTrue(MASKS.has_stripped(once))
-        self.assertEqual("https://h/?a=1&•••", strip("https://h/?a=1&https://u:p@h2"))
-
-    def test_names_and_values_are_read_decoded_and_whatever_they_hold(self):
-        strip = MASKS.strip_url_secrets
-        odd = "a/b/" + "c" * 500 + "_token"
-        cases = {
-            # A percent-encoded name, and a value that decodes to a credential's name or an address.
-            "https://h.example.com/?tok%65n=abc&page=2": "https://h.example.com/?tok%65n=•••&page=2",
-            "https://h.example.com/?q=%70assword%3Dhunter2": "https://h.example.com/?q=•••",
-            "https://h.example.com/?next=https%253A%252F%252Fu%253Ap%2540h": "https://h.example.com/?next=•••",
-            # A long name holding "/".
-            f"https://h.example.com/?{odd}=abc&x=1": f"https://h.example.com/?{odd}=•••&x=1",
-            # Closing marks after an address: whatever is left, no secret.
-            "x(https://h.example.com/?token=abc)]}": "x(https://h.example.com/?token=•••}",
-            # An address inside a path is checked once more; deeper is hidden whole.
-            "https://h.example.com/r/https://u:p@b.example.com/x": "https://h.example.com/r/https://•••@b.example.com/x",
-            "https://h.example.com/https://h.example.com/https://u:p@b.example.com": "https://h.example.com/https://•••",
-            # What does not parse cleanly is hidden whole.
-            "https://[::1/?token=abc": "https://•••",
-            "https://h.example.com:port/?token=abc": "https://•••",
-        }
-        for given, wanted in cases.items():
-            self.assertEqual(wanted, strip(given), given)
-            self.assertEqual(wanted, strip(strip(given)), given)
-            self.assertTrue(MASKS.has_stripped(strip(given)), given)
+    def test_a_token_runs_to_ascii_whitespace_only(self):
+        # A stretch after '"', "<" or a non-ASCII space is part of the token, so it is hidden with it.
+        self.assertEqual('see https://••• next', MASKS.strip_url_secrets('see https://h.example.com/?a=1"&token=S next'))
+        self.assertEqual("https://charts.example.com/stable\tnext", MASKS.strip_url_secrets("https://charts.example.com/stable\tnext"))
+        # JSON around an address with nothing to hide stays as it is; with something, the token goes whole.
+        self.assertEqual('{"url":"https://h.example.com/x","n":1}', MASKS.strip_url_secrets('{"url":"https://h.example.com/x","n":1}'))
+        self.assertEqual('{"url":"https://•••', MASKS.strip_url_secrets('{"url":"https://u:p@h.example.com/x","n":1}'))
 
     def test_a_text_too_long_to_check_is_hidden_whole(self):
         text = "x" * (MASKS.MAX_TEXT + 1) + " https://u:hunter2@h.example.com/"
@@ -549,26 +487,61 @@ class ReviewStrip(unittest.TestCase):
         long_plain = "x" * (MASKS.MAX_TEXT + 1)
         self.assertEqual(long_plain, MASKS.strip_url_secrets(long_plain), "no address: nothing to hide")
 
-    def test_an_address_cut_short_after_its_password_is_hidden(self):
-        # Messages are shortened before they are shown: "...https://user:pass" with its "@host" cut off.
-        self.assertEqual("failed: https://•••", MASKS.strip_url_secrets("failed: https://user:hunter2"))
+    def test_cutting_and_masking_agree(self):
+        # Review 5, finding 1: cut() and the mask use the same token rule, so cutting before
+        # masking gives what masking before cutting gives, and a cut never splits a token.
+        texts = ["failed: https://user:1234@h.example.com/x more", "x" * 30, "short",
+                 "a https://h.example.com/ok b https://u:p@h.example.com/x c", "https://u:p\u00a0q@h.example.com/x tail",
+                 'pull "https://u:p@h.example.com/x" failed', "https:\\\\u:p@h.example.com x"]
+        for text in texts:
+            for length in range(0, len(text) + 2):
+                with self.subTest(text=text, length=length):
+                    cut_first = MASKS.strip_url_secrets(MASKS.cut(text, length))
+                    whole = {m.group(0) for m in MASKS.TOKEN.finditer(text)}
+                    self.assertNotIn("u:p", cut_first)
+                    self.assertNotIn("1234", cut_first)
+                    for found in MASKS.TOKEN.finditer(MASKS.cut(text, length).rstrip("…")):
+                        self.assertIn(found.group(0), whole, "a cut never leaves part of a token")
+        self.assertEqual("failed: …", MASKS.cut("failed: https://user:1234@h.example.com/x", 20))
+        self.assertEqual("x" * 20, MASKS.cut("x" * 30, 20))
 
-    def test_a_stripped_value_in_angle_brackets_is_still_known(self):
-        self.assertTrue(MASKS.has_stripped(MASKS.strip_url_secrets("<https://h.example.com/?token=abc>")))
-        self.assertFalse(MASKS.has_stripped("https://h.example.com/?page=2 and •••"))
+    def test_squeezing_spaces_never_splits_a_token(self):
+        # Review 5, finding 2: collapsing whitespace before masking must not leave part of a token behind.
+        message = "import  failed:\thttps://u:ab\u00a0cdef@h.example.com/x\n done"
+        squeezed = MASKS.squeeze(message)
+        self.assertEqual(MASKS.strip_url_secrets(squeezed), MASKS.squeeze(MASKS.strip_url_secrets(message)))
+        self.assertNotIn("cdef", MASKS.strip_url_secrets(squeezed))
+        vm = {"status": {"conditions": [{"type": "Failure", "status": "True", "message": message}]}}
+        problem = VMS._problem(vm, {})
+        self.assertNotIn("cdef", MASKS.strip_url_secrets(problem))
+
+    def test_an_events_message_is_cut_without_splitting_an_address(self):
+        event = {"apiVersion": "v1", "kind": "Event", "metadata": {"name": "e", "namespace": "lab"},
+                 "involvedObject": {"name": "disk"}, "message": "x" * 380 + " https://user:1234@h.example.com/x",
+                 "lastTimestamp": "2026-10-28T00:00:00Z"}
+        with mock.patch.object(RES, "kget", lambda path: {"items": [copy.deepcopy(event)]}):
+            self.assertNotIn("1234", MASKS.strip_url_secrets(RES.events_for("lab", "disk")[0]["message"]))
+
+    def test_saved_masks_are_recognised_and_admin_text_is_not(self):
+        self.assertTrue(MASKS.has_stripped("see https://•••"))
+        for text in ("https://h.example.com/?page=2 and •••", "Loading •••", "x=•••", "a/•••"):
+            self.assertFalse(MASKS.has_stripped(text), text)
 
     def test_adversarial_text_is_handled_in_linear_time(self):
         # Anyone who can write an annotation or an event message writes this text.
         n = 200_000
         texts = ["a" * n + "://", "x://" * (n // 4), "https://h/" + "?a" * (n // 2), "https://" + "@" * n,
                  "https://u:p@" * (n // 12), "https://h/?" + "a=" * (n // 2), "https://h/?next=" + "%3A%2F%2F" * (n // 9),
-                 "https://h/?token=" + ")" * n, ("https://h/?a=https://h/?b=" * (n // 26)), "?" + "a" * n + "=•••",
-                 "?a" * (n // 2) + "=•••", "https://" + "a:" * (n // 2)]
+                 "https://h/?token=" + ")" * n, ("https://h/?a=https://h/?b=" * (n // 26)), "https://h/?" + "[" * n + "=v",
+                 "?a" * (n // 2) + "=•••", "https://" + "a:" * (n // 2), "a:/" * (n // 3), ('a://"' * (n // 5)),
+                 "https://x " * (n // 10), "p" * n]
         for text in texts:
             started = time.monotonic()
             stripped = MASKS.strip_url_secrets(text)
             MASKS.has_stripped(stripped)
             MASKS.has_stripped(text)
+            MASKS.cut(text, n // 2)
+            MASKS.squeeze(text)
             self.assertLess(time.monotonic() - started, 1.5, text[:40])
 
 
@@ -601,7 +574,7 @@ class ReviewLists(Base):
         with mock.patch.object(HELM, "kget", return_value={"items": []}), \
                 mock.patch.object(HELM, "helmcharts", return_value=[chart]):
             rows = HELM.releases()
-        self.assertEqual("oci://•••@registry.example.com/charts/demo", rows[0]["chart"])
+        self.assertEqual("oci://•••", rows[0]["chart"])
 
     def test_event_messages_lose_url_credentials_below_reveal(self):
         event = {"apiVersion": "v1", "kind": "Event",
@@ -614,7 +587,7 @@ class ReviewLists(Base):
             ask = lambda role: handler(ROUTER.Request("GET", "/api/resources/events",
                                                       {"ns": ["lab"], "name": ["disk"]}, {}, "someone", role))
             viewer, admin = ask("viewer"), ask("admin")
-        self.assertEqual("Unable to connect to https://•••@images.example.com/d.img?token=•••", viewer[0]["message"])
+        self.assertEqual("Unable to connect to https://•••", viewer[0]["message"])
         self.assertIn("hunter2", admin[0]["message"])
 
     def vm_route(self, path, role, query=None):
@@ -637,16 +610,16 @@ class ReviewLists(Base):
             viewer = self.vm_route("/api/vm", "viewer", {"ns": "lab", "name": "vm"})
             admin = self.vm_route("/api/vm", "admin", {"ns": "lab", "name": "vm"})
         self.assertHidden(viewer)
-        self.assertEqual("import from https://•••@images.example.com/x?token=•••", viewer["events"][0]["message"])
-        self.assertIn("•••@", viewer["conditions"][0]["message"])
-        self.assertIn("•••@", viewer["filling"][0]["message"])
+        self.assertEqual("import from https://•••", viewer["events"][0]["message"])
+        self.assertIn("https://•••", viewer["conditions"][0]["message"])
+        self.assertIn("https://•••", viewer["filling"][0]["message"])
         for text in (admin["events"][0]["message"], admin["conditions"][0]["message"], admin["filling"][0]["source"], admin["source"]):
             self.assertIn("hunter2", text)
 
     def test_a_vm_disk_cannot_be_made_from_a_stripped_address(self):
         import homestead_vm_edit as VM_EDIT
         with mock.patch.object(VM_EDIT.V, "platform", return_value={"cdi": True}):
-            for url in ("https://•••@images.example.com/x.img", "https://images.example.com/x.img?token=•••"):
+            for url in ("https://•••", "see https://•••"):
                 with self.subTest(url=url), self.assertRaisesRegex(ValueError, "hidden"):
                     VM_EDIT._disk_volume({"spec": {"template": {"spec": {}}}}, "lab", "d", "10Gi", "", {"url": url}, [], [])
 
@@ -665,7 +638,7 @@ class ReviewLists(Base):
                 with self.subTest(path=path):
                     self.assertHidden(viewer)
                     self.assertHidden(again)
-                    self.assertIn("•••@images.example.com", repr(viewer))
+                    self.assertIn("https://•••", repr(viewer))
                     self.assertIn("hunter2", repr(admin))
 
     def test_the_vm_list_strips_addresses_for_a_viewer_without_touching_the_shared_copy(self):
