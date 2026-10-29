@@ -463,6 +463,50 @@ class ReviewStrip(unittest.TestCase):
             self.assertEqual(wanted, strip(strip(given)), given)
             self.assertTrue(MASKS.has_stripped(strip(given)), given)
 
+    def test_third_review_forms_leave_no_credential(self):
+        strip = MASKS.strip_url_secrets
+        leaks = {
+            # A "'" is legal in a login or a value; '"', "<", ">" and other spaces are not, so
+            # an address they cut short with something hidden or an "@" after is hidden to the next space.
+            "https://u:12'cdef@h.example.com/x": "12'cdef",
+            "https://u:ab'cdef@h.example.com/x": "cdef",
+            "https://h.example.com/?token=ab'cdef": "cdef",
+            'https://u:ab"cdef@h.example.com/x': "cdef",
+            "https://u:ab\u00a0cdef@h.example.com/x": "cdef",
+            "https://h.example.com/?token=ab\"cdef more": "cdef",
+            # Encoded addresses in a path segment, a bare query piece and a fragment.
+            "https://h.example.com/fetch/https%3A%2F%2Fuser%3Asecret%40example.com/x": "secret",
+            "https://h.example.com/?https%3A%2F%2Fuser%3Asecret%40example.com": "secret",
+            "https://h.example.com/#https%3A%2F%2Fuser%3Asecret%40example.com": "secret",
+            # Names with a suffix, other credential names, a name encoded twice.
+            "https://h.example.com/?key%5B%5D=SECRET1&code[]=SECRET2&key%20=SECRET3": "SECRET",
+            "https://h.example.com/?hmac=SECRET1&otp=SECRET2&ticket=SECRET3": "SECRET",
+            "https://h.example.com/?%2574oken=SECRET": "SECRET",
+            # Separators other parsers accept.
+            "https:\\\\user:pass@h.example.com/x": "pass",
+            "https:/user:pass@h.example.com/x": "pass",
+        }
+        for given, secret in leaks.items():
+            with self.subTest(given=given):
+                once = strip(given)
+                self.assertNotIn(secret, once)
+                self.assertEqual(once, strip(once))
+                self.assertTrue(MASKS.has_stripped(once))
+        # JSON around an address with nothing to hide stays as it is.
+        self.assertEqual('{"url":"https://h.example.com/x","n":1}', strip('{"url":"https://h.example.com/x","n":1}'))
+        self.assertEqual("C:\\Users\\x", strip("C:\\Users\\x"))
+
+    def test_a_message_is_never_cut_inside_an_address(self):
+        cut = MASKS.cut
+        self.assertEqual("failed: …", cut("failed: https://user:1234@h.example.com/x", 20))
+        self.assertEqual("short", cut("short", 20))
+        self.assertEqual("x" * 20, cut("x" * 30, 20))
+        event = {"apiVersion": "v1", "kind": "Event", "metadata": {"name": "e", "namespace": "lab"},
+                 "involvedObject": {"name": "disk"}, "message": "x" * 380 + " https://user:1234@h.example.com/x",
+                 "lastTimestamp": "2026-10-28T00:00:00Z"}
+        with mock.patch.object(RES, "kget", lambda path: {"items": [copy.deepcopy(event)]}):
+            self.assertNotIn("1234", RES.events_for("lab", "disk")[0]["message"])
+
     def test_an_address_anywhere_in_a_query_or_fragment_is_hidden(self):
         strip = MASKS.strip_url_secrets
         for given in ("https://h/?https://u:p@h2", "https://h/#https://u:p@h2", "https://h/?a=1&https://u:p@h2",

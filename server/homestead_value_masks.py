@@ -21,11 +21,17 @@ HIDDEN = "•••"
 REVEAL = ("GET", "/api/resources/reveal")
 # The text is written by anyone who can set an annotation or cause an event,
 # so finding addresses is one bounded regex and the rest is linear parsing.
-# An address: a scheme of at most 32 characters, "://", then everything up
-# to whitespace, a quote or an angle bracket.
-ADDRESS = re.compile(r"(?i)[a-z][a-z0-9+.-]{0,31}://[^\s\"'<>]*")
+# An address: a scheme of at most 32 characters, ":" and one or two slashes
+# or backslashes (parsers other than Python's accept "https:/" and
+# "https:\\"), then everything up to whitespace, '"' or an angle bracket
+# (none of which an address may hold unencoded; "'" it may).
+ADDRESS = re.compile(r"(?i)[a-z][a-z0-9+.-]{0,31}:[\\/]{1,2}[^\s\"<>]*")
 # One closing mark right at an address's end belongs to the text around it.
-CLOSERS = ")]},"
+CLOSERS = ")]},'"
+# What may end an address cleanly; anything else ('"', "<", ">", a space
+# other than these) may have cut it short.
+CLEAN_END = " \t\r\n"
+SPACE = re.compile(r"[ \t\r\n]")
 # A longer text holding an address is hidden whole rather than checked.
 MAX_TEXT = 256 * 1024
 TOO_LONG = f"{HIDDEN} (hidden: too long to check for credentials)"
@@ -37,7 +43,9 @@ MAX_DEPTH = 1
 # sessions. Matched on the decoded name, whatever characters it holds.
 # Hiding a harmless one too is the safe side.
 SECRET_PARAM = re.compile(r"pass|^pw$|pwd|secret|token|sig|credential|auth|session|jwt|bearer|cookie|private|"
-                          r"key$|^code$", re.I)
+                          r"hmac|otp|ticket|key$|^code$", re.I)
+# A name's array suffix (key[], code[0]) and spaces, dropped before matching.
+NAME_NOISE = re.compile(r"\[[^\]]*\]|\s")
 # The k3s and RKE2 Helm controller: its Job's pods carry the chart's label,
 # and the Jobs are named for what they do. Rancher runs helm in
 # cattle-system's helm-operation-* pods.
@@ -56,32 +64,48 @@ def sees_values(role):
     return AUTH.allows(role, reveal_role())
 
 
+def _secret_name(name):
+    """A parameter's name, decoded (up to three times, as a server that
+    decodes again would read it) and without an array suffix or spaces,
+    looks like a credential's."""
+    for _ in range(3):
+        plain = urllib.parse.unquote_plus(name)
+        if plain == name:
+            break
+        name = plain
+    return bool(SECRET_PARAM.search(NAME_NOISE.sub("", name)))
+
+
+def _encoded(text):
+    """Text that, decoded once, holds another address (or one still encoded)
+    or a credential's name."""
+    if "%" not in text and "+" not in text:
+        return False
+    plain = urllib.parse.unquote_plus(text)
+    return "://" in plain or "%3a%2f%2f" in plain.lower() or bool(SECRET_PARAM.search(plain))
+
+
 def _value_hidden(name, value):
-    """Whether a parameter's value is hidden: its decoded name says it is a
+    """Whether a parameter's value is hidden: its name says it is a
     credential, or the value is (or, decoded once, holds) another address or
     a credential's name."""
-    if SECRET_PARAM.search(urllib.parse.unquote_plus(name)):
-        return True
-    if "://" in value:
-        return True
-    if "%" in value or "+" in value:
-        plain = urllib.parse.unquote_plus(value)
-        # Decoded once; an address still encoded inside is hidden as well.
-        return "://" in plain or "%3a%2f%2f" in plain.lower() or bool(SECRET_PARAM.search(plain))
-    return False
+    return _secret_name(name) or _encoded(name) or "://" in value or _encoded(value)
 
 
 def _pairs(text, separators, nested=False):
-    """name=value pairs split on separators; each hidden value becomes HIDDEN,
-    and every other byte is kept as written. With nested (a query or
-    fragment), a piece holding another address is hidden whole even without
-    "=": what cannot be fully understood is hidden."""
+    """Pieces split on separators, every byte kept as written except: a
+    name=value piece's value when _value_hidden, and a piece without a value
+    that holds an encoded address or credential name. With nested (a query
+    or fragment), any piece holding another address is hidden whole too:
+    what cannot be fully understood is hidden."""
     out = []
     for piece in re.split(f"([{re.escape(separators)}])", text):
         name, eq, value = piece.partition("=")
-        if eq and value and value != HIDDEN and _value_hidden(name, value):
+        if piece == HIDDEN or (len(piece) == 1 and piece in separators):
+            pass
+        elif eq and value and value != HIDDEN and _value_hidden(name, value):
             piece = f"{name}={HIDDEN}"
-        elif nested and "://" in piece:
+        elif (nested and "://" in piece) or (not (eq and value) and _encoded(piece)):
             piece = HIDDEN
         out.append(piece)
     return "".join(out)
@@ -90,7 +114,12 @@ def _pairs(text, separators, nested=False):
 def _address(url, depth):
     """One address with its user, password and credential values hidden; the
     whole address, if it does not parse cleanly."""
-    scheme, _, rest = url.partition("://")
+    scheme, _, rest = url.partition(":")
+    if not rest.startswith("//") or rest[2:3] in ("/", "\\"):
+        # "https:/", "https:\\" or "https:///": other parsers read a login
+        # there that urlsplit would not. Hidden if it could hold one.
+        return f"{scheme}://{HIDDEN}" if any(c in rest for c in "@=%") else url
+    rest = rest[2:]
     try:
         parts = urllib.parse.urlsplit(url)
         parts.port  # noqa: B018  (raises on a malformed port)
@@ -110,23 +139,59 @@ def _address(url, depth):
         if depth >= MAX_DEPTH:
             return f"{scheme}://{HIDDEN}"
         path = _strip(path, depth + 1)
-    path = _pairs(path, ";")
+    path = _pairs(path, "/;")
     if question:
         query = _pairs(query, "&;", nested=True)
-    if hash_ and ("=" in fragment or "://" in fragment):
+    if hash_:
         fragment = _pairs(fragment, "&;", nested=True)
     return f"{scheme}://{netloc}{path}{question}{query}{hash_}{fragment}"
 
 
 def _strip(text, depth):
     out, pos = [], 0
+    # The next space and the next "@", found once and reused while ahead,
+    # so many short addresses in one long stretch stay linear.
+    next_space, next_at = -1, -1
     for found in ADDRESS.finditer(text):
         start, end = found.span()
-        if end - start > len(found.group(0).partition("://")[0]) + 3 and text[end - 1] in CLOSERS:
+        if start < pos:
+            continue            # inside a stretch already hidden
+        scheme = found.group(0).partition(":")[0]
+        stopped = end < len(text) and text[end] not in CLEAN_END
+        if end - start > len(scheme) + 3 and text[end - 1] in CLOSERS:
             end -= 1
-        out += [text[pos:start], _address(text[start:end], depth)]
+        original = text[start:end]
+        address = _address(original, depth)
+        if stopped:
+            # Cut short by a character no address holds unencoded: if
+            # anything was hidden, or an "@" follows, what follows up to the
+            # next space may be the rest of a login or value: hidden too.
+            if next_space < found.end():
+                space = SPACE.search(text, found.end())
+                next_space = space.start() if space else len(text)
+            if next_at < found.end():
+                next_at = text.find("@", found.end())
+                next_at = len(text) + 1 if next_at < 0 else next_at
+            if address != original or next_at < next_space:
+                address, end = f"{scheme}://{HIDDEN}", next_space
+        out += [text[pos:start], address]
         pos = end
     return "".join(out) + text[pos:]
+
+
+def cut(text, length, mark="…"):
+    """text shortened to length characters, never inside an address: one
+    that would be cut goes whole, so no login is left without its "@" and
+    no value without its end, which a later strip could not recognise."""
+    text = str(text or "")
+    if len(text) <= length:
+        return text
+    for found in ADDRESS.finditer(text):
+        if found.start() >= length:
+            break
+        if found.end() > length:
+            return text[:found.start()] + mark
+    return text[:length]
 
 
 def strip_url_secrets(text):
@@ -134,7 +199,7 @@ def strip_url_secrets(text):
     values replaced by HIDDEN; a text over MAX_TEXT holding an address is
     hidden whole. Stripping twice changes nothing, and the time it takes is
     linear in the text's length."""
-    if not isinstance(text, str) or "://" not in text:
+    if not isinstance(text, str) or (":/" not in text and ":\\" not in text):
         return text
     if len(text) > MAX_TEXT:
         return TOO_LONG

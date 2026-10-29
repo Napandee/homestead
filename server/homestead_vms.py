@@ -146,7 +146,7 @@ def _problem(vm, vmi, instance_known=True):
     Synchronized are False. A stopped VM's Ready says only that it has no
     instance, which is not a problem."""
     conditions = ((vm.get("status") or {}).get("conditions") or []) + ((vmi.get("status") or {}).get("conditions") or [])
-    text = lambda c: " ".join(str(c.get("message") or c.get("reason") or "").split())[:300]
+    text = lambda c: MASKS.cut(" ".join(str(c.get("message") or c.get("reason") or "").split()), 300)
     for condition in conditions:
         if condition.get("type") == "Failure" and condition.get("status") == "True" and text(condition):
             message = text(condition)
@@ -211,7 +211,7 @@ def detail(ns, name, include_sensitive=True):
     guest = (vmi.get("status") or {}).get("guestOSInfo") or {}
     row["guest"] = {k: guest.get(k, "") for k in ("prettyName", "kernelRelease", "version", "id")}
     row["conditions"] = [{"type": c.get("type"), "status": c.get("status"), "reason": c.get("reason", ""),
-                          "message": (c.get("message") or "")[:300]}
+                          "message": MASKS.cut(c.get("message"), 300)}
                          for c in ((vm.get("status") or {}).get("conditions") or []) + ((vmi.get("status") or {}).get("conditions") or [])]
     row["events"] = events_for(ns, name, "")[:30]
     claims = _claims(ns)
@@ -443,7 +443,7 @@ def _for_role(request, answer):
     pages: every address without its credentials (a disk's source, a
     failed import's message in events, conditions or filling). The list is
     shared by every role, so it is copied first."""
-    return MASKS.for_role(request.role, answer)
+    return MASKS.for_role(getattr(request, "role", None), answer)
 
 
 # Its routes and who may use them (homestead_routes.py).

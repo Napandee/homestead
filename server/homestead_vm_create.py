@@ -16,6 +16,7 @@ import urllib.error
 import urllib.parse
 import homestead_kube as KUBE
 import homestead_names as NAMES
+import homestead_value_masks as MASKS
 import homestead_hvimage as HVIMAGE
 import homestead_pod_resources as RESOURCES
 import homestead_operations as OPS
@@ -171,7 +172,7 @@ def list_vm_disks():
                     "capacity": request.get("storage", ""),
                     "storage_class": (spec.get("storage", {}) or {}).get("storageClassName", ""),
                     "access_modes": (spec.get("storage", {}) or {}).get("accessModes", []),
-                    "message": str(messages[0])[:300] if messages else "",
+                    "message": MASKS.cut(messages[0], 300) if messages else "",
                     "in_use": bool(used_by), "used_by": used_by})
     return sorted(out, key=lambda row: (row["namespace"], row["name"]))
 

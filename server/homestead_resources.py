@@ -475,7 +475,7 @@ def events_for(namespace, name, uid=""):
     selector = f"involvedObject.name={name}" + (f",involvedObject.uid={uid}" if uid else "")
     path = (f"/api/v1/namespaces/{urllib.parse.quote(namespace)}/events" if namespace else "/api/v1/events")
     items = kget(f"{path}?fieldSelector={urllib.parse.quote(selector)}").get("items", [])
-    rows = [{"type": e.get("type", ""), "reason": e.get("reason", ""), "message": (e.get("message") or "")[:400],
+    rows = [{"type": e.get("type", ""), "reason": e.get("reason", ""), "message": MASKS.cut(e.get("message"), 400),
              "count": e.get("count") or 1, "last": e.get("lastTimestamp") or e.get("eventTime") or ""} for e in items]
     return sorted(rows, key=lambda r: r["last"] or "", reverse=True)[:100]
 
