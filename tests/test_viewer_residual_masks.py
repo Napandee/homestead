@@ -580,6 +580,64 @@ class ReviewLogs(Logs):
         self.assertEqual(200, self.logs("admin", ns="cattle-system", pod="helm-operation-abcde", container="helm").code)
 
 
+VM_IMAGE = {"metadata": {"name": "img", "namespace": "lab", "creationTimestamp": "2026-10-28T00:00:00Z"},
+            "spec": {"displayName": "img", "url": "https://u:hunter2@images.example.com:8443/x.img?token=s3cr3t-t0ken",
+                     "sourceType": "download"},
+            "status": {"storageClassName": "", "conditions": [
+                {"type": "Imported", "status": "False", "reason": "ImportFailed",
+                 "message": "GET https://u:hunter2@images.example.com:8443/x.img?token=s3cr3t-t0ken failed"}]}}
+
+
+class VmImages(Base):
+    """The VM image lists keep no credential of an image's address, for any role (at the source),
+    and the routes strip again below reveal."""
+
+    def setUp(self):
+        super().setUp()
+        import homestead_vm_create as VMC
+        self.vmc = VMC
+        get = lambda path: {"items": [copy.deepcopy(VM_IMAGE)]} if path.endswith("/virtualmachineimages") else {"items": []}
+        patch = mock.patch.object(VMC.I, "kget", get)
+        patch.start()
+        self.addCleanup(patch.stop)
+        for key in ("vmimages", "vmimg"):
+            ROUTER.forget(key)
+            self.addCleanup(ROUTER.forget, key)
+
+    def assertClean(self, answer):
+        text = repr(answer)
+        for secret in ("hunter2", "s3cr3t-t0ken", "u:", "token="):
+            self.assertNotIn(secret, text)
+
+    def test_the_lists_hold_no_credential_for_anyone(self):
+        listed = self.vmc.list_vm_images()
+        self.assertClean(listed)
+        self.assertEqual("https://•••", listed[0]["url"])
+        cached = self.vmc.vm_image_cache()
+        self.assertClean(cached)
+        self.assertEqual("images.example.com:8443", cached["images"][0]["source"])
+
+    def test_the_routes_hold_no_credential_for_a_viewer_or_an_admin(self):
+        import homestead_vm_review as REVIEW
+        import homestead_vm_server as VM_SERVER
+        with mock.patch.object(VM_SERVER.PLATFORM, "detect", return_value={"harvester": True, "cdi": True}), \
+                mock.patch.object(REVIEW, "create_options", lambda: {"images": self.vmc.list_vm_images()}):
+            for role in ("viewer", "admin"):
+                for module, path in ((IMPORTS, "/api/images/vm"), (IMPORTS, "/api/vmimages"), (REVIEW, "/api/vm/create-options")):
+                    with self.subTest(role=role, path=path):
+                        handler = module.ROUTES[("GET", path)][1]
+                        self.assertClean(handler(ROUTER.Request("GET", path, {}, {}, "someone", role)))
+
+    def test_the_image_store_still_matches_its_own_images_by_their_full_address(self):
+        listed = self.vmc.list_vm_images(raw=True)
+        self.assertEqual(VM_IMAGE["spec"]["url"], listed[0]["url"])
+
+    def test_the_image_stores_own_list_shows_the_host_only(self):
+        import homestead_vmstore as VMSTORE
+        self.assertEqual("images.example.com:8443", VMSTORE._source({"url": VM_IMAGE["spec"]["url"]}))
+        self.assertEqual("upload", VMSTORE._source({"url": "", "source": ""}))
+
+
 class ReviewLists(Base):
     def test_the_helm_list_strips_a_pending_charts_address(self):
         chart = {"metadata": {"name": "demo", "namespace": "kube-system"},

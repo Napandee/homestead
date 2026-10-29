@@ -162,3 +162,18 @@ def for_role(role, answer):
         return strip_url_secrets(answer)
     strip_in_place(answer)
     return answer
+
+
+def host(url):
+    """Where an address points, as host[:port], never its login: what a page
+    shows as an image's source. Empty when it does not parse."""
+    import urllib.parse
+    try:
+        parts = urllib.parse.urlsplit(str(url or ""))
+        port = parts.port
+    except ValueError:
+        return ""
+    if not parts.hostname:
+        return ""
+    name = f"[{parts.hostname}]" if ":" in parts.hostname else parts.hostname
+    return f"{name}:{port}" if port else name

@@ -592,7 +592,8 @@ ROUTES = {
     ("POST", "/api/sources/scan"): ("admin", lambda request: scan_source(request.body.get("name"), request.user)),
     ("POST", "/api/sources/trust"): ("admin", lambda request: trust_source(request.body, request.user)),
     ("POST", "/api/sources/inspect"): ("admin", lambda request: inspect_source_container(request.body["name"], request.body["container"])),
-    ("GET", "/api/images/vm"): ("viewer", lambda request: homestead_routes.cached("vmimages", 15, vm_image_cache)),
+    ("GET", "/api/images/vm"): ("viewer", lambda request: MASKS.for_role(
+        request.role, homestead_routes.cached("vmimages", 15, vm_image_cache))),
     ("GET", "/api/vmimages"): ("viewer", lambda request: MASKS.for_role(
         request.role, homestead_routes.cached("vmimg", 30, list_vm_images))),
     ("GET", "/api/images"): ("viewer", lambda request: homestead_routes.cached("imgcache", 30, image_cache)),
