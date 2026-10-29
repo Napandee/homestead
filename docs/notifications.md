@@ -136,7 +136,10 @@ viewer on the Resources page too - never sees a token. The
 and the Secret's name. An address with nothing after its host has nothing to
 hide and stays on the annotation. Homestead reads the Secret only when it made
 it for that webhook, and only while its scheme, host and port match the
-annotation's; it is deleted with the app or VM. A webhook saved before this
+annotation's; it is deleted with the app or VM. When the app or VM is deleted
+outside Homestead, the leader deletes its Secret once it has been missing
+for an hour, with no job on it (each delete is in the pod log and the audit
+log). A webhook saved before this
 release is moved into its Secret by Homestead after its next monitoring
 round, and on its next save. An admin can **Reveal** the Secret on the
 Resources page.
