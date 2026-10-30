@@ -17,6 +17,7 @@ from fakes.kube import Kube
 HW = server.HW
 NODES = server.NODES
 WORKLOADS = server.WORKLOADS
+FLOW = server.FLOW
 
 CORAL = {"id": "coral_usb", "name": "Google Coral USB", "label": "hardware/coral-usb",
          "host_path": "/dev/bus/usb", "container_path": "/dev/bus/usb", "path_type": "Directory",
@@ -96,6 +97,43 @@ class DefinitionsOnce(unittest.TestCase):
         self.assertEqual({name: ["coral_usb"] for name in names}, found)
         self.assertEqual("true", labelled.get("hardware/coral-usb"))
         self.assertLessEqual(self.reads, 1)
+
+    def map_reads_for_flow(self, count):
+        pods = [{"apiVersion": "v1", "kind": "Pod",
+                 "metadata": {"name": f"app-{i}", "namespace": "lab", "labels": {}},
+                 "spec": {"nodeName": "node-a", "nodeSelector": {"hardware/coral-usb": "true"},
+                          "containers": [{"name": "c", "image": "example.com/app:1"}]},
+                 "status": {"phase": "Running"}} for i in range(count)]
+        with Kube(self.hardware_map, *pods):
+            self.reads = 0
+            cards = [w for w in FLOW.get_flow2()["workloads"] if w["kind"] == "container"]
+        self.assertEqual(count, len(cards))
+        self.assertTrue(all(card["hardware"] == ["coral_usb"] for card in cards), "the definitions still apply")
+        return self.reads
+
+    def test_the_flow_page_reads_the_definitions_as_often_for_twenty_pods_as_for_one(self):
+        one = self.map_reads_for_flow(1)
+        self.assertEqual(one, self.map_reads_for_flow(20))
+        self.assertLessEqual(one, 1)
+
+    def test_without_a_configmap_the_built_in_definitions_still_apply(self):
+        # A 404 leaves the built-in set; passing it down changes nothing.
+        dri = {"volumes": [{"name": "dri", "hostPath": {"path": "/dev/dri"}}]}
+        with Kube(deployment("plex", **dri), *[node(name) for name in ("node-a", "node-b")]), \
+                self.hosts(("node-a", "node-b"), {"node-a": {"devices": {"dri": True}}}), \
+                mock.patch.object(NODES.DISKS, "summary", lambda: {}), \
+                mock.patch.object(NODES.HOST_OS, "report", lambda: {"hosts": {}}):
+            expected = HW.workload_features(deployment("plex", **dri)["spec"]["template"]["spec"])
+            ids = sorted(f["id"] for f in HW.features())
+            self.reads = 0
+            apps = WORKLOADS.get_workloads()
+            hosts = {row["name"]: row["hardware"] for row in NODES.get_nodes()}
+        self.assertEqual(["igpu"], expected)
+        self.assertEqual(expected, apps[0]["hardware"])
+        self.assertEqual({"node-a": ids, "node-b": ids}, {name: sorted(hw) for name, hw in hosts.items()})
+        self.assertTrue(hosts["node-a"]["igpu"])
+        self.assertFalse(hosts["node-b"]["igpu"])
+        self.assertEqual(2, self.reads, "one read (a 404) per build")
 
     def test_saved_definitions_show_in_the_next_apps_build(self):
         with Kube(self.hardware_map, deployment("plex", nodeSelector={"hardware/hailo": "true"})):
