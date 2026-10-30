@@ -8,6 +8,7 @@ import tempfile
 import threading
 import types
 import unittest
+from unittest import mock
 from pathlib import Path
 from unittest.mock import patch
 
@@ -27,6 +28,15 @@ HOST_FACTS = '\n'.join(['DEVICE /dev/sdb', 'SIZE ' + str(1000 * GB), 'UUID fs-da
     'SERIAL TEST-DISK-01', 'WWN test-wwn', 'KIND disk', 'BYID /dev/disk/by-id/ata-TEST-DISK-01',
     'CONFIG {"diskUUID":"disk-source-uuid"}', 'END'])
 
+
+
+def setUpModule():
+    # These tests check the conversion's steps, ticking it as fast as they like;
+    # how often a waiting job looks at its host is tested in test_job_cadence.
+    import homestead_job_cadence as CADENCE
+    patch = mock.patch.dict(CADENCE.INTERVALS, {"disk-v2-convert": 0})
+    patch.start()
+    unittest.addModuleCleanup(patch.stop)
 
 class Operations(JobStore):
     TERMINAL = OPS.TERMINAL
