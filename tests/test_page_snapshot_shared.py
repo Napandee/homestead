@@ -6,6 +6,7 @@ replica's sampler loop takes in a newer file, so their page reads serve the
 leader's parts under the same rules as the leader's own: STALE_AFTER, a write
 that forgets a key after the part was read, a key popped from the cache, and
 a newer read of the replica's own all win over it."""
+import contextlib
 import json
 import os
 import sys
@@ -104,10 +105,72 @@ class WhoIsWrittenForTests(Shared):
         self.lead_one_cycle()
         self.assertFalse(os.path.exists(self.path()))
 
-    def test_an_ask_older_than_ask_fresh_writes_nothing(self):
-        self.someone_follows(ago=self.PAGES.ASK_FRESH + 5)
-        self.lead_one_cycle()
-        self.assertFalse(os.path.exists(self.path()))
+    def asked_at(self, mtime_ns, ino_from_new_file=False):
+        """A follower's touch, as its own clock (or its NFS server's) dates it."""
+        wanted = os.path.join(self.tmp.name, self.PAGES.WANTED)
+        if ino_from_new_file:
+            os.replace(wanted, wanted + ".old")    # still held: the new file has a new inode
+        open(wanted, "a").close()
+        os.utime(wanted, ns=(mtime_ns, mtime_ns))
+
+    def lead_and_say_whether_written(self, now):
+        if os.path.exists(self.path()):
+            os.remove(self.path())
+        self.lead_one_cycle(now)
+        return os.path.exists(self.path())
+
+    def test_an_ask_that_has_not_changed_for_ask_fresh_writes_nothing(self):
+        self.assertTrue(self.lead_and_say_whether_written(100), "an ask seen first counts once")
+        self.assertFalse(self.lead_and_say_whether_written(100 + self.PAGES.ASK_FRESH))
+
+    def test_a_follower_whose_clock_is_behind_still_gets_the_parts(self):
+        """#914 review: the leader's own clock never meets the follower's mtime."""
+        behind = int((time.time() - 3600) * 1e9)
+        self.asked_at(behind)
+        self.assertTrue(self.lead_and_say_whether_written(100))
+        self.asked_at(behind + 30 * 10**9)          # its next touch, ASK_EVERY later
+        self.assertTrue(self.lead_and_say_whether_written(100 + self.PAGES.cadence()))
+        self.assertTrue(self.lead_and_say_whether_written(100 + self.PAGES.cadence() + self.PAGES.ASK_FRESH - 1))
+        self.assertFalse(self.lead_and_say_whether_written(100 + self.PAGES.cadence() + self.PAGES.ASK_FRESH))
+
+    def test_a_follower_whose_clock_is_ahead_is_not_written_for_after_it_stops_asking(self):
+        self.asked_at(int((time.time() + 3600) * 1e9))
+        self.assertTrue(self.lead_and_say_whether_written(100))
+        self.assertFalse(self.lead_and_say_whether_written(100 + self.PAGES.ASK_FRESH + 1))
+
+    def test_a_new_wanted_file_with_the_same_time_is_a_new_ask(self):
+        self.asked_at(5 * 10**18)
+        self.assertTrue(self.lead_and_say_whether_written(100))
+        self.asked_at(5 * 10**18, ino_from_new_file=True)
+        self.assertTrue(self.lead_and_say_whether_written(100 + self.PAGES.ASK_FRESH + 1))
+
+    def test_asking_goes_through_the_self_data_write_fence_and_says_once_when_it_fails(self):
+        wanted = os.path.join(self.tmp.name, self.PAGES.WANTED)
+        os.remove(wanted)
+        scoped = []
+
+        @contextlib.contextmanager
+        def scope(path):
+            scoped.append(path)
+            yield
+
+        def held(path):
+            raise RuntimeError("Homestead's own data is moving")
+
+        every = self.PAGES.ASK_EVERY
+        with mock.patch.object(SHARED, "WRITE_SCOPE", scope), mock.patch("builtins.print") as said:
+            with mock.patch.object(SHARED, "WRITE_GUARD", held):
+                self.PAGES.tick(FOLLOWER, {}, self.builders, now=100)
+                self.PAGES.tick(FOLLOWER, {}, self.builders, now=100 + every)
+            self.assertFalse(os.path.exists(wanted), "nothing written past the fence")
+            self.assertEqual([wanted, wanted], scoped)
+            self.assertEqual(1, len([c for c in said.call_args_list if "not asked" in str(c)]))
+            self.PAGES.tick(FOLLOWER, {}, self.builders, now=100 + 2 * every)
+            self.assertTrue(os.path.exists(wanted))
+            with mock.patch.object(SHARED, "WRITE_GUARD", held):
+                self.PAGES.tick(FOLLOWER, {}, self.builders, now=100 + 3 * every)
+            self.assertEqual(2, len([c for c in said.call_args_list if "not asked" in str(c)]),
+                             "said again once it failed after working")
 
     def test_a_follower_asks_when_it_looks(self):
         os.remove(os.path.join(self.tmp.name, self.PAGES.WANTED))
@@ -121,14 +184,16 @@ class WhoIsWrittenForTests(Shared):
         self.PAGES.tick(FOLLOWER, {}, self.builders, now=100)
         wanted = os.path.join(self.tmp.name, self.PAGES.WANTED)
         os.utime(wanted, (1000, 1000))
-        self.PAGES.tick(FOLLOWER, {}, self.builders, now=101)
+        self.PAGES.tick(FOLLOWER, {}, self.builders, now=100 + self.PAGES.ASK_EVERY - 1)
         self.assertEqual(1000, os.stat(wanted).st_mtime)
+        self.PAGES.tick(FOLLOWER, {}, self.builders, now=100 + self.PAGES.ASK_EVERY)
+        self.assertNotEqual(1000, os.stat(wanted).st_mtime, "asked again on the loop's clock")
 
     def test_unchanged_parts_are_not_rewritten_until_they_would_go_stale(self):
         with mock.patch.object(self.PAGES.time, "time", lambda: 1000):
             self.lead_one_cycle(100)
         first = os.stat(self.path()).st_ino
-        self.PAGES.share(now=1001)
+        self.PAGES.share(now=1001, mono=101)
         self.assertEqual(first, os.stat(self.path()).st_ino)
 
     def test_unchanged_parts_are_rewritten_a_cycle_before_refresh(self):
@@ -137,7 +202,7 @@ class WhoIsWrittenForTests(Shared):
         with mock.patch.object(self.PAGES.time, "time", lambda: 1000):
             self.lead_one_cycle(100)
         first = os.stat(self.path()).st_ino
-        self.PAGES.share(now=1000 + self.PAGES.REFRESH - self.PAGES.cadence())
+        self.PAGES.share(now=1000 + self.PAGES.REFRESH - self.PAGES.cadence(), mono=101)
         self.assertNotEqual(first, os.stat(self.path()).st_ino)
 
     def test_a_changed_part_is_written_at_once(self):
@@ -156,7 +221,7 @@ class WhoIsWrittenForTests(Shared):
         with mock.patch.object(self.PAGES.time, "time", lambda: 1000):
             self.lead_one_cycle(100)
         before = self.written()["written"]
-        self.PAGES.share(now=1000 + self.PAGES.REFRESH)
+        self.PAGES.share(now=1000 + self.PAGES.REFRESH, mono=101)
         self.assertGreater(self.written()["written"], before)
         self.assertLess(self.PAGES.REFRESH, self.PAGES.STALE_AFTER)
 

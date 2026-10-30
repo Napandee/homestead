@@ -50,8 +50,10 @@ _state = {"last": None, "leader": False}
 # The leader's parts for the other replicas, on the shared data volume.
 FILE = "page-snapshot.json"
 # The other replicas ask for it by touching this file whenever they look (at
-# most every ASK_EVERY s); the leader writes only while an ask is under
-# ASK_FRESH s old. One replica (the default) writes nothing.
+# most every ASK_EVERY s); the leader writes only while it saw the file change
+# within ASK_FRESH s, on its own monotonic clock: the file's time is set by
+# another node's clock (on NFS, the server's), so it is never compared with
+# the leader's. One replica (the default) writes nothing.
 WANTED = "page-snapshot.wanted"
 ASK_EVERY = 30
 ASK_FRESH = 120
@@ -59,7 +61,9 @@ ASK_FRESH = 120
 # go stale for the other replicas (STALE_AFTER).
 REFRESH = STALE_AFTER // 2
 _shared = {"seen": None, "failing": False,   # the file last taken in; whether writing it fails
-           "asked": None, "digest": None, "written": 0.0}
+           "asked": None, "ask_failing": False,   # this follower's last ask (monotonic); whether it fails
+           "ask_seen": None, "ask_changed": None,   # the leader's last look at WANTED; when it changed (monotonic)
+           "digest": None, "written": 0.0}
 _floor = {}             # key -> no leader part read before this is taken in (a pop here)
 
 
@@ -75,7 +79,8 @@ def reset():
         _parts.clear()
     _wanted.clear()
     _state.update(last=None, leader=False)
-    _shared.update(seen=None, failing=False, asked=None, digest=None, written=0.0)
+    _shared.update(seen=None, failing=False, asked=None, ask_failing=False, ask_seen=None,
+                   ask_changed=None, digest=None, written=0.0)
     _floor.clear()
 
 
@@ -148,6 +153,7 @@ def tick(is_leader, inputs, builders, now=None):
     cadence(), at once on boot and on becoming the leader, and soon after a
     wake). Returns what cycle() returned, or None when none ran."""
     leader = bool(is_leader())
+    now = time.monotonic() if now is None else now
     became = leader and not _state["leader"]
     if not leader:
         if _state["leader"]:
@@ -156,10 +162,9 @@ def tick(is_leader, inputs, builders, now=None):
             with _lock:
                 _parts.clear()
         _state["leader"] = False
-        take_in()
+        take_in(mono=now)
         return None
     _state["leader"] = True
-    now = time.monotonic() if now is None else now
     last = _state["last"]
     due = (last is None or became or now - last >= cadence()
            or (_wanted.is_set() and now - last >= MIN_GAP))
@@ -168,7 +173,7 @@ def tick(is_leader, inputs, builders, now=None):
     _wanted.clear()
     _state["last"] = now
     done = cycle(inputs, builders)
-    share()
+    share(mono=now)
     return done
 
 
@@ -176,36 +181,54 @@ def _path():
     return os.path.join(SHARED.DIR, FILE)
 
 
-def _asked(now):
-    """Whether another replica asked for the parts within ASK_FRESH."""
+def _asked(mono):
+    """Whether another replica asked for the parts within ASK_FRESH: whether
+    WANTED changed (inode or mtime_ns) within ASK_FRESH of the leader's own
+    monotonic clock (mono). A file first seen counts as one ask, so a leader
+    that just started writes at once for a follower already asking."""
     try:
-        return now - os.stat(os.path.join(SHARED.DIR, WANTED)).st_mtime < ASK_FRESH
+        status = os.stat(os.path.join(SHARED.DIR, WANTED))
     except OSError:
         return False
+    seen = (status.st_ino, status.st_mtime_ns)
+    if seen != _shared["ask_seen"]:
+        _shared.update(ask_seen=seen, ask_changed=mono)
+    return mono - _shared["ask_changed"] < ASK_FRESH
 
 
-def _ask(now):
+def _ask(mono):
     """On a replica that is not the leader: ask for the parts (a touch of
-    WANTED), at most every ASK_EVERY. Never raises."""
+    WANTED), at most every ASK_EVERY of mono (its monotonic clock), through
+    the self-data write fence like every other write to the data volume.
+    Says once when asking fails, then nothing until it works again. Never
+    raises."""
     asked = _shared["asked"]
-    if asked is not None and now - asked < ASK_EVERY:
+    if asked is not None and mono - asked < ASK_EVERY:
         return
-    _shared["asked"] = now
+    _shared["asked"] = mono
+    path = os.path.join(SHARED.DIR, WANTED)
     try:
-        path = os.path.join(SHARED.DIR, WANTED)
-        with open(path, "a", encoding="utf-8"):
-            pass
-        os.utime(path, None)
-    except OSError:
-        pass   # e.g. during a move of Homestead's own data: asked again next look
+        with SHARED.write_scope(path):
+            if SHARED.WRITE_GUARD is not None:
+                SHARED.WRITE_GUARD(path)
+            with open(path, "a", encoding="utf-8"):
+                pass
+            os.utime(path, None)
+        _shared["ask_failing"] = False
+    except Exception as error:
+        # e.g. during a move of Homestead's own data: asked again ASK_EVERY later.
+        if not _shared["ask_failing"]:
+            _shared["ask_failing"] = True
+            print(f"page snapshot: not asked: {str(error)[:160]}", flush=True)
 
 
-def share(now=None):
+def share(now=None, mono=None):
     """Write the leader's fresh parts for the other replicas, while one asks
-    for them. Never raises: a page they compute for themselves is no worse
-    than before."""
+    for them (now: wall time, as the parts are dated; mono: the loop's
+    monotonic clock, for the asks). Never raises: a page they compute for
+    themselves is no worse than before."""
     now = time.time() if now is None else now
-    if not _asked(now):
+    if not _asked(time.monotonic() if mono is None else mono):
         return
     with _lock:
         keys = list(_parts)
@@ -239,8 +262,9 @@ def _load(path):
         return json.load(handle)
 
 
-def take_in(now=None):
-    """On a replica that is not the leader: the leader's parts, when its
+def take_in(now=None, mono=None):
+    """On a replica that is not the leader: ask for the leader's parts
+    (_ask, on mono, the loop's monotonic clock), and take them in when its
     file changed since the last look. A part is taken in only while fresh,
     newer than what is held, newer than the last forget of its key here,
     and newer than this replica's own kept read of it.
@@ -252,7 +276,7 @@ def take_in(now=None):
     before the write. (A newer read of this replica's own in its place is
     no write: the kept-read rule below covers it.)"""
     now = time.time() if now is None else now
-    _ask(time.time())
+    _ask(time.monotonic() if mono is None else mono)
     with _lock:
         for key, held in list(_parts.items()):
             if CACHE.kept_at(key) is None:
