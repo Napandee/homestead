@@ -62,14 +62,31 @@ def _fetch_keys():
             if k.get("kty") == "RSA" and k.get("kid")}
 
 
+def _refresh(now, running):
+    """One fetch of the keys; an answer with no RSA keys counts as a failure."""
+    global _fetching
+    try:
+        fresh = _fetch_keys()
+        if fresh:
+            with _lock:
+                _certs.update(keys=fresh, at=now)
+    except Exception:
+        pass
+    finally:
+        with _lock:
+            _fetching = None
+        running.set()
+
+
 def _key(kid):
     """Cloudflare's current signing keys, cached; refreshed when a new one appears.
 
-    The fetch runs outside the lock and one at a time. While it runs, a request
-    whose key is already known answers from the cache; one whose key is not waits
-    for it, but only up to FETCH_WAIT. A failed fetch keeps the keys there were and
-    is not retried for RETRY_AFTER, and an unknown key id refetches at most that
-    often too, so neither a slow key endpoint nor made-up key ids hold requests up.
+    The fetch runs on a background thread, one at a time. A request whose key is
+    already known answers from the cache at once, even the one that started the
+    refresh; one whose key is not waits for the fetch, but only up to FETCH_WAIT.
+    A failed fetch keeps the keys there were and is not retried for RETRY_AFTER,
+    and an unknown key id refetches at most that often too, so neither a slow key
+    endpoint nor made-up key ids hold requests up.
     """
     global _fetching
     now = _now()
@@ -83,17 +100,8 @@ def _key(kid):
             _fetching = threading.Event()
         running = _fetching
     if start:
-        try:
-            fresh = _fetch_keys()
-            with _lock:
-                _certs.update(keys=fresh, at=now)
-        except Exception:
-            pass
-        finally:
-            with _lock:
-                _fetching = None
-            running.set()
-    elif running is not None and not known:
+        threading.Thread(target=_refresh, args=(now, running), name="cfaccess-keys", daemon=True).start()
+    if running is not None and not known:
         running.wait(FETCH_WAIT)
     with _lock:
         keys = _certs["keys"]
