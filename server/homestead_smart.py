@@ -113,6 +113,8 @@ READING_SECONDS = 300    # a reading the page took itself
 ACTIVE_SECONDS = 15      # while a self-test runs on the host: the page's refresh, so its progress moves
 FAILED_SECONDS = 60      # a failed read is answered from memory this long
 _clock = time.monotonic
+_wall = time.time
+_awake = {}              # node -> {name: the drive's last reading taken awake} (#974)
 _readings = {}           # node -> {"at", "keep", "rows": {name: row}, "error"}
 _readings_lock = threading.Lock()
 _reading_locks = [threading.Lock() for _ in range(16)]   # one read per host at a time
@@ -125,6 +127,32 @@ def remember(node, rows, keep=READING_SECONDS):
         _readings[node] = {"at": _clock(), "keep": keep, "rows": dict(rows), "error": None}
 
 
+def keep_last(node, rows):
+    """A host's rows ({name: row}) with each sleeping drive's last reading kept.
+
+    The regular read leaves a drive the host spun down asleep, and the helper
+    then has nothing new to say about it. Its last reading taken awake stands
+    in, marked asleep, with the temperature unknown: a figure from before it
+    slept says nothing about it now. Drives no longer on the host are
+    forgotten."""
+    with _readings_lock:
+        last = _awake.get(node) or {}
+        kept, out = {}, {}
+        for name, row in rows.items():
+            if not isinstance(row, dict) or not row.get("asleep"):
+                if isinstance(row, dict):
+                    row = dict(row, read_epoch=int(_wall()))
+                    kept[name] = row
+                out[name] = row
+            elif name in last:
+                kept[name] = last[name]
+                out[name] = dict(last[name], asleep=True, temperature_c=None)
+            else:
+                out[name] = row
+        _awake[node] = kept
+    return out
+
+
 def forget(node):
     with _readings_lock:
         _readings.pop(node, None)
@@ -134,6 +162,7 @@ def reset():
     """Forget every reading (tests)."""
     with _readings_lock:
         _readings.clear()
+        _awake.clear()
 
 
 def _fresh(node):
@@ -159,7 +188,7 @@ def _reading(node):
             entry = _fresh(node)
             if entry is None:
                 try:
-                    rows = {row.get("name"): row for row in inventory(node)["disks"]}
+                    rows = keep_last(node, {row.get("name"): row for row in inventory(node)["disks"]})
                     entry = {"at": _clock(), "keep": READING_SECONDS, "rows": rows, "error": None}
                 except Exception as error:
                     entry = {"at": _clock(), "keep": FAILED_SECONDS, "rows": {}, "error": error}

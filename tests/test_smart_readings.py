@@ -242,7 +242,7 @@ class HelperTests(unittest.TestCase):
         self.smart.AUTH_STORE = store.name
         self.reads = []
         self.smart.disks = lambda: [("sda", "/host/dev/sda")]
-        self.smart.report = lambda name, path: self.reads.append(name) or {"name": name}
+        self.smart.report = lambda name, path, wake=True: self.reads.append(name) or {"name": name}
 
     def get(self, path, headers=None):
         handler = self.smart.H.__new__(self.smart.H)

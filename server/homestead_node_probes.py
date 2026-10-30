@@ -145,8 +145,11 @@ def _run(now, smart):
                 entry["misses"] += 1
             else:
                 entry.update(payload=payload, at=now, misses=0, last_ok=now)
+        # A host whose probe did not answer this round is not asked for SMART
+        # either: it would only wait out SMART_TIMEOUT too (#974). It stays due.
         due = {node: pod for node, pod in ready.items()
-               if node in _state and (smart or now - _state[node]["smart_at"] >= SMART_EVERY)}
+               if readings.get(node) is not None
+               and (smart or now - _state[node]["smart_at"] >= SMART_EVERY)}
         _round["at"] = now
         _round["read"] = time.monotonic()
     # The temperatures are recorded before SMART is read, so nobody waits on it.
@@ -162,6 +165,8 @@ def _run(now, smart):
                 entry["smart_stale"] = entry["smart"] is not None
                 entry["smart_at"] = now - SMART_EVERY + SMART_RETRY
             else:
+                # A drive the host has put to sleep is left asleep by the helper; its last reading stands in.
+                found = SMART.keep_last(node, found)
                 entry.update(smart=found, smart_at=now, smart_stale=False)
                 # The SMART page answers from this reading until the next one has had time to land.
                 SMART.remember(node, found, keep=SMART_EVERY + SMART_TIMEOUT + INTERVAL)
