@@ -24,6 +24,7 @@ import time
 import urllib.error
 import urllib.parse
 
+import homestead_forced as FORCED
 import homestead_names as NAMES
 import homestead_routes as ROUTER
 
@@ -140,6 +141,7 @@ def save(rows, version=None):
         raise
     with _status_lock:
         _status["at"] = 0.0
+    FORCED.forget("portal-status")
     shown, now = _stored()
     return {"ok": True, "links": view(shown), "version": str(((saved or {}).get("metadata") or {}).get("resourceVersion") or now)}
 
@@ -223,6 +225,10 @@ def status(force=False):
     with _status_lock:
         if not force and time.monotonic() - _status["at"] < STATUS_TTL:
             return _status["value"]
+    return FORCED.run("portal-status", _probe) if force else _probe()
+
+
+def _probe():
     rows = stored()
     result = {}
 

@@ -15,6 +15,7 @@ import time
 import urllib.parse
 import homestead_operations as OPS
 import homestead_routes as ROUTER
+import homestead_forced as FORCED
 
 
 kget = ksend = None
@@ -143,7 +144,13 @@ def _report(request):
     force = (request.query.get("force") or ["0"])[0].lower() in ("1", "true", "yes")
     # Settings › Homestead checks Homestead's own parts, not every app.
     only = (request.query.get("only") or [""])[0] == "homestead"
-    answer = json.loads(json.dumps(homestead_report() if force and only else report(force)))
+    if not force:
+        answer = report(False)
+    elif only:
+        answer = FORCED.run("image-updates:homestead", homestead_report)
+    else:
+        answer = FORCED.run("image-updates", lambda: report(True))
+    answer = json.loads(json.dumps(answer))      # a copy: the forced answer is shared
     answer["policy"] = update_policy_status()
     return answer
 
