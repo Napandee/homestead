@@ -10,11 +10,13 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
 sys.path.insert(0, str(ROOT / "tests"))
 
+import homestead_app_settings as APP_SETTINGS
 import homestead_node_probes as PROBES
 import homestead_nodes as NODES
 import homestead_smart as SMART
-from test_smart_readings import Base, ROWS, load_helper, probe_pods
+from test_smart_readings import Base, ROWS, _Response, load_helper, probe_pods
 
+CFG = APP_SETTINGS.DEFAULTS["smart"]
 AWAKE = {"name": "sda", "available": True, "health": "passed", "temperature_c": 38,
          "power_on_hours": 1200, "pending": 0, "reallocated": 0, "uncorrectable": 0,
          "wear": {"life_pct": 90}}
@@ -79,6 +81,11 @@ class HelperStandbyTests(unittest.TestCase):
         self.assertNotIn("asleep", row)
         self.assertEqual(40, row["temperature_c"])
 
+    def test_exit_3_without_a_standby_message_is_not_asleep(self):
+        out = json.dumps({"smartctl": {"messages": [{"string": "something else"}], "exit_status": 3}})
+        self.smart.subprocess.run = lambda argv, **_: SimpleNamespace(returncode=3, stdout=out, stderr="")
+        self.assertNotIn("asleep", self.smart.report("sda", "/host/dev/sda", wake=False))
+
     def test_a_drive_that_cannot_be_opened_is_still_unavailable(self):
         self.smart.subprocess.run = lambda argv, **_: SimpleNamespace(returncode=2, stdout="", stderr="open failed")
         row = self.smart.report("sda", "/host/dev/sda", wake=False)
@@ -105,21 +112,30 @@ class KeepLastTests(Base):
         self.assertEqual(1200, row["power_on_hours"])
         self.assertEqual("passed", row["health"])
         self.assertIsNone(row["temperature_c"])
-        self.assertIn("read_epoch", row)
+        self.assertEqual(int(SMART._wall()), row["read_at"])
         # Still kept on the next sleeping read.
         again = SMART.keep_last("node-1", {"sda": self.asleep()})["sda"]
         self.assertEqual(1200, again["power_on_hours"])
 
     def test_a_drive_asleep_since_before_any_reading_is_asleep_not_unavailable(self):
         row = SMART.keep_last("node-1", {"sda": self.asleep()})["sda"]
-        health = NODES.smart_disk_health(row)
+        health = NODES.smart_disk_health(row, CFG)
         self.assertEqual("asleep", health["state"])
         self.assertEqual([], health["issues"])
 
     def test_a_sleeping_drive_with_bad_sectors_keeps_its_findings(self):
         SMART.keep_last("node-1", {"sda": dict(AWAKE, pending=4)})
         row = SMART.keep_last("node-1", {"sda": self.asleep()})["sda"]
-        self.assertEqual("critical", NODES.smart_disk_health(row)["state"])
+        self.assertEqual("critical", NODES.smart_disk_health(row, CFG)["state"])
+
+    def test_a_sleeping_drive_with_a_clean_reading_is_asleep_not_healthy(self):
+        SMART.keep_last("node-1", {"sda": dict(AWAKE)})
+        row = SMART.keep_last("node-1", {"sda": self.asleep()})["sda"]
+        health = NODES.smart_disk_health(row, CFG)
+        self.assertEqual("asleep", health["state"])
+        self.assertEqual(90, health["life_pct"])
+        self.assertEqual(row["read_at"], health["read_at"])
+        self.assertIsNone(NODES.smart_disk_health(self.asleep(), CFG)["read_at"])
 
     def test_a_drive_gone_from_the_host_is_forgotten(self):
         SMART.keep_last("node-1", {"sda": dict(AWAKE)})
@@ -172,6 +188,18 @@ class ProbeLoopStandbyTests(Base):
         # Back up: it is still due, and read at once.
         PROBES.run_round(now=1000 + PROBES.SMART_EVERY + PROBES.INTERVAL)
         self.assertEqual(2, self.helper.calls)
+
+    def test_a_host_whose_temperature_read_fails_but_answers_is_still_read_for_smart(self):
+        real = self.helper.urlopen
+
+        def broken(request, timeout=None):
+            if ":9099/" in getattr(request, "full_url", request):
+                return _Response(b"not json")
+            return real(request, timeout)
+        with mock.patch.object(SMART.urllib.request, "urlopen", broken):
+            PROBES.run_round(now=1000, smart=True)
+        self.assertEqual(1, self.helper.calls, "a host that answered was not read for SMART")
+        self.assertIn("sda", PROBES._state["node-1"]["smart"])
 
 
 if __name__ == "__main__":

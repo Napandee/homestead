@@ -141,7 +141,7 @@ def keep_last(node, rows):
         for name, row in rows.items():
             if not isinstance(row, dict) or not row.get("asleep"):
                 if isinstance(row, dict):
-                    row = dict(row, read_epoch=int(_wall()))
+                    row = dict(row, read_at=int(_wall()))
                     kept[name] = row
                 out[name] = row
             elif name in last:

@@ -169,12 +169,19 @@ def asleep(name, path, message):
         "smartctl_messages": message,
     }
 
+def in_standby(data, message):
+    """Whether smartctl said it left the drive alone for its power mode:
+    exit code 3 alone could also be two error bits."""
+    said = [str(row.get("string") or "") for row in
+            ((data.get("smartctl") or {}).get("messages") or [])] + [message]
+    return any(re.search(r"\b(STANDBY|SLEEP) mode\b", text) for text in said)
+
 def report(name, path, wake=True):
     args = ["-d", device_type(name), "-a", "-j", path]
     if not wake:
         args = ["-n", f"standby,{STANDBY_EXIT}", *args]
     code, data, message = run(args)
-    if not wake and code == STANDBY_EXIT:
+    if not wake and code == STANDBY_EXIT and in_standby(data, message):
         return asleep(name, path, message)
     device = data.get("device") or {}
     protocol = str(device.get("protocol") or "")

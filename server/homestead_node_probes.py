@@ -18,6 +18,7 @@ tests) a read happens in the caller, as before, at most every INTERVAL.
 import json
 import threading
 import time
+import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
@@ -54,20 +55,22 @@ def _read(ip, port, timeout, headers=None):
 
 
 def _probe(pod):
-    """One host's temperatures, devices and drives, or None when the probe didn't answer."""
+    """(One host's temperatures, devices and drives, or None when no reading
+    came back; whether the host answered at all). A host that answered with
+    something unusable is still up: only a refused or timed-out connection is not."""
     try:
         payload = {"node": pod["spec"]["nodeName"], "thermal": [], "hwmon": [], "devices": {},
                    "disks": [], "sensors": 0}
         payload.update(_read(pod["status"]["podIP"], 9099, TIMEOUT))
-    except Exception:
-        return None
+    except Exception as error:
+        return None, isinstance(error, urllib.error.HTTPError) or not isinstance(error, OSError)
     # Provenance is assigned by this backend, never accepted from the probe
     # response, and stamped when the answer arrived. Consumers still verify
     # Pod/DaemonSet ownership, current host boot and sample age before
     # trusting NUMA data.
     payload["numa_source"] = {"pod": {key: pod.get("metadata", {}).get(key) for key in ("namespace", "name", "uid")},
                               "received_at": time.time()}
-    return payload
+    return payload, True
 
 
 def _smart(pod):
@@ -127,7 +130,8 @@ def _run(now, smart):
     pods = _listing()
     listed = {(p.get("spec") or {}).get("nodeName") for p in pods} - {None}
     ready = {p["spec"]["nodeName"]: p for p in pods if _ready(p)}
-    readings = _pool({node: (lambda p=pod: _probe(p)) for node, pod in ready.items()})
+    answers = _pool({node: (lambda p=pod: _probe(p)) for node, pod in ready.items()})
+    readings = {node: payload for node, (payload, _) in answers.items()}
     with _lock:
         for node in list(_state):
             if node in listed:
@@ -145,10 +149,11 @@ def _run(now, smart):
                 entry["misses"] += 1
             else:
                 entry.update(payload=payload, at=now, misses=0, last_ok=now)
-        # A host whose probe did not answer this round is not asked for SMART
-        # either: it would only wait out SMART_TIMEOUT too (#974). It stays due.
+        # A host that did not answer its probe this round (refused, timed out)
+        # is not asked for SMART either: it would only wait out SMART_TIMEOUT
+        # too (#974). It stays due.
         due = {node: pod for node, pod in ready.items()
-               if readings.get(node) is not None
+               if answers[node][1]
                and (smart or now - _state[node]["smart_at"] >= SMART_EVERY)}
         _round["at"] = now
         _round["read"] = time.monotonic()

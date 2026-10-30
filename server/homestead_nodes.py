@@ -183,11 +183,6 @@ def smart_disk_health(report, settings=None):
                 "life_basis": "", "spare_pct": None, "stale_probe": False,
                 "summary": report.get("unavailable_reason")
                 or "this drive or its USB bridge does not expose SMART data"}
-    if report.get("asleep") and "read_epoch" not in report:
-        # Left asleep by the regular read before Homestead ever read it awake (#974).
-        return {"state": "asleep", "issues": [], "life_pct": None,
-                "life_basis": "", "spare_pct": None, "stale_probe": False,
-                "summary": "asleep; Homestead has not read it awake yet"}
     issues = smart_disk_issues(report, settings)
     # A probe from before wear reporting sends no "wear" key at all, which is
     # not the same as a drive that has nothing to report. Saying "unsupported"
@@ -215,7 +210,14 @@ def smart_disk_health(report, settings=None):
             summary = "passed, with no reported defects"
     else:
         summary = "; ".join(x["reason"] for x in issues)
+    if report.get("asleep") and not issues:
+        # Left asleep by the regular read (#974): its last reading taken awake
+        # (read_at) says nothing is wrong, which is not the same as healthy now.
+        state = "asleep"
+        summary = ("asleep; no reported defects when last read awake" if report.get("read_at")
+                   else "asleep; Homestead has not read it awake yet")
     return {"state": state, "issues": issues, "summary": summary,
+            "read_at": report.get("read_at"),
             "life_pct": None if life is None else int(life),
             "life_basis": wear.get("basis", ""),
             "stale_probe": stale_probe,
