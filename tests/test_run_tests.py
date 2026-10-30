@@ -87,6 +87,19 @@ class TimedShardTests(unittest.TestCase):
     def test_a_missing_file_means_no_recorded_times(self):
         self.assertEqual({}, RUN.load_durations(self.root / "durations.json"))
 
+    def test_a_file_that_does_not_read_means_no_recorded_times(self):
+        """Conflict markers or a cut-short write: shares fall back to sizes."""
+        path = self.root / "durations.json"
+        for text in ("<<<<<<< HEAD\n{", '["test_a.py"]', "", "{\"test_a.py\": 1"):
+            with self.subTest(text=text):
+                path.write_text(text)
+                self.assertEqual({}, RUN.load_durations(path))
+
+    def test_only_seconds_are_kept(self):
+        path = self.root / "durations.json"
+        path.write_text('{"test_a.py": 1.5, "test_b.py": null, "test_c.py": "2", "test_d.py": true, "test_e.py": -1}')
+        self.assertEqual({"test_a.py": 1.5}, RUN.load_durations(path))
+
 
 class RecordTests(unittest.TestCase):
     def test_each_file_is_timed_once_and_rounded(self):
@@ -110,6 +123,27 @@ class RecordTests(unittest.TestCase):
         self.assertEqual({"test_zz_recorded_one.py": 1.23, "test_zz_recorded_two.py": 0.0},
                          RUN.record_durations(files, clock=lambda: next(ticks)))
         self.assertEqual(["test_zz_recorded_one", "test_zz_recorded_two"], ran)
+
+    def test_a_failing_file_keeps_its_last_time_or_has_none(self):
+        """A file that fails is often cut short: its time would be too low."""
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        root = pathlib.Path(folder.name)
+        files = []
+        for name in ("test_zz_failing_one", "test_zz_failing_two", "test_zz_passing"):
+            body = "self.assertTrue(True)" if name == "test_zz_passing" else "self.fail('no')"
+            (root / f"{name}.py").write_text(
+                "import unittest\n"
+                "class T(unittest.TestCase):\n"
+                f"    def test_it(self): {body}\n")
+            files.append(root / f"{name}.py")
+            self.addCleanup(sys.modules.pop, name, None)
+        sys.path.insert(0, str(root))
+        self.addCleanup(sys.path.remove, str(root))
+        ticks = iter([0.0, 0.01, 1.0, 1.01, 2.0, 2.5])
+        seconds = RUN.record_durations(files, clock=lambda: next(ticks),
+                                       previous={"test_zz_failing_one.py": 7.5})
+        self.assertEqual({"test_zz_failing_one.py": 7.5, "test_zz_passing.py": 0.5}, seconds)
 
 
 class ChangedTests(unittest.TestCase):

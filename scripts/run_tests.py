@@ -41,11 +41,18 @@ def test_files():
 
 
 def load_durations(path=DURATIONS):
-    """Seconds per test file name, as --record-durations wrote them."""
+    """Seconds per test file name, as --record-durations wrote them. A file
+    that is missing or does not read (conflict markers, a cut-short write)
+    gives none, so every file is weighed by its size; anything that is not
+    a number of seconds is left out."""
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
+        durations = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
         return {}
+    if not isinstance(durations, dict):
+        return {}
+    return {name: seconds for name, seconds in durations.items()
+            if type(seconds) in (int, float) and seconds >= 0}
 
 
 def shard(files, index, count, durations=None):
@@ -58,7 +65,7 @@ def shard(files, index, count, durations=None):
     sizes = {path: path.stat().st_size for path in files}
     timed = [path for path in files if path.name in durations]
     timed_bytes = sum(sizes[path] for path in timed)
-    rate = sum(durations[path.name] for path in timed) / timed_bytes if timed_bytes else 1
+    rate = sum(durations[path.name] for path in sorted(timed)) / timed_bytes if timed_bytes else 1
 
     def weight(path):
         return durations[path.name] if path.name in durations else sizes[path] * rate
@@ -71,20 +78,26 @@ def shard(files, index, count, durations=None):
     return sorted(shares[index - 1])
 
 
-def record_durations(files, clock=time.perf_counter):
+def record_durations(files, clock=time.perf_counter, previous=None):
     """Run each file once, in this process and in name order, and return its
     seconds to a hundredth (at a tenth most files read 0, and files that
-    weigh nothing would all pile onto one share). A failing file still gets
-    a time; it is named."""
+    weigh nothing would all pile onto one share). A file that fails is often
+    cut short, so it keeps its time from `previous` or gets none (it is then
+    weighed by its size); it is named."""
+    previous = previous or {}
     sys.path.insert(0, str(TESTS))
     seconds = {}
     for path in sorted(files):
         start = clock()
         suite = unittest.defaultTestLoader.loadTestsFromName(path.stem)
         result = unittest.TextTestRunner(stream=io.StringIO(), verbosity=0).run(suite)
-        seconds[path.name] = round(clock() - start, 2)
-        if not result.wasSuccessful():
-            print(f"{path.name}: failed (its time may be off)", flush=True)
+        took = round(clock() - start, 2)
+        if result.wasSuccessful():
+            seconds[path.name] = took
+        else:
+            if path.name in previous:
+                seconds[path.name] = previous[path.name]
+            print(f"{path.name}: failed, " + ("kept its last time" if path.name in previous else "no time recorded"), flush=True)
     return seconds
 
 
@@ -149,7 +162,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     files = test_files()
     if args.record_durations:
-        seconds = record_durations(files)
+        seconds = record_durations(files, previous=load_durations())
         DURATIONS.write_text(json.dumps(seconds, indent=1, sort_keys=True) + "\n", encoding="utf-8")
         print(f"{len(seconds)} test files, {sum(seconds.values()):.0f} s: {DURATIONS.relative_to(ROOT)}")
         return 0

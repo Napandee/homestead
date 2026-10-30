@@ -94,7 +94,9 @@ The four CI shares are balanced by how long each test file takes, from
 `tests/durations.json`; a new test file is weighed by its size until then.
 When the shares drift apart (a file got much slower or faster, or many new
 ones), refresh it with `python scripts/run_tests.py --record-durations`,
-which runs every test file once in one process and rewrites the file.
+which runs every test file once in one process and rewrites the file. A file
+that fails keeps its last recorded time, and a file that does not read is
+ignored: the shares are then balanced by file size.
 
 On Windows, run the full suite as `python -X utf8 -m unittest discover -s tests`:
 sources are UTF-8, and Windows otherwise reads text in its own code page.
