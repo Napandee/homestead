@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
 
 import homestead_cache as CACHE
+import homestead_restarts as RESTARTS
 import homestead_routes as ROUTER
 from test_page_snapshot import Cluster, clean_cache, clean_snapshot
 
@@ -62,6 +63,10 @@ class PageDatedTests(unittest.TestCase):
 class OverviewRouteTests(unittest.TestCase):
     def setUp(self):
         clean_cache(self)
+        # The cycle reads pods, and the restart record would look at them on its
+        # own thread, writing restarts.json while the test cleans up (the reason
+        # test_page_snapshot's setUpModule patches it too).
+        self.enterContext(mock.patch.object(RESTARTS, "observe_later", lambda pods: True))
         self.cluster = Cluster(self)
         self.PAGES = clean_snapshot(self)
         self.OV = self.cluster.server.OVERVIEW_ROUTES
