@@ -10,6 +10,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
 sys.path.insert(0, str(ROOT / "tests"))
 
+import tempfile
+
+import homestead_alerts as ALERTS
 import homestead_app_settings as APP_SETTINGS
 import homestead_node_probes as PROBES
 import homestead_nodes as NODES
@@ -143,6 +146,12 @@ class KeepLastTests(Base):
         row = SMART.keep_last("node-1", {"sda": self.asleep()})["sda"]
         self.assertNotIn("power_on_hours", row)
 
+    def test_a_host_forgotten_and_read_again_has_no_old_reading(self):
+        SMART.keep_last("node-1", {"sda": dict(AWAKE)})
+        SMART.forget("node-1")
+        row = SMART.keep_last("node-1", {"sda": self.asleep()})["sda"]
+        self.assertNotIn("power_on_hours", row)
+
     def test_the_pages_own_read_keeps_the_last_reading_too(self):
         SMART.keep_last("node-1", {"sda": dict(AWAKE)})
         with mock.patch.object(SMART, "inventory", return_value={"disks": [self.asleep()]}):
@@ -200,6 +209,38 @@ class ProbeLoopStandbyTests(Base):
             PROBES.run_round(now=1000, smart=True)
         self.assertEqual(1, self.helper.calls, "a host that answered was not read for SMART")
         self.assertIn("sda", PROBES._state["node-1"]["smart"])
+
+
+class AsleepAlertTests(Base):
+    """A drive asleep with no reading kept (after a restart) proves nothing."""
+
+    def setUp(self):
+        super().setUp()
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        ALERTS.bind(folder.name)
+        self.clock = 1_000_000.0
+
+    def tick(self, overview, seconds=60):
+        self.clock += seconds
+        return ALERTS.observe({"health": ALERTS.health_facts(overview), "jobs": []}, self.clock)
+
+    def overview(self, smart, issues=()):
+        return {"health_issues": list(issues),
+                "nodes": [{"name": "node-1", "temps": {"disks": [{"name": "sda", "smart": smart}]}}]}
+
+    def test_an_open_drive_alert_stays_open_while_the_drive_sleeps_unread(self):
+        failing = [{"severity": "critical", "kind": "Disk", "name": "node-1/sda", "reason": "4 pending sectors"}]
+        bad = SMART.keep_last("node-1", {"sda": dict(AWAKE, pending=4)})["sda"]
+        self.tick(self.overview(bad, failing))
+        opened = self.tick(self.overview(bad, failing), seconds=90)
+        self.assertEqual(["Drive node-1/sda needs attention"], [a["title"] for a in opened])
+        SMART.reset()            # Homestead restarted: no reading kept
+        row = SMART.keep_last("node-1", {"sda": {"name": "sda", "available": True, "asleep": True}})["sda"]
+        self.assertEqual("asleep", NODES.smart_disk_health(row, CFG)["state"])
+        for _ in range(5):
+            self.assertEqual([], self.tick(self.overview(row)), "the alert cleared on no reading")
+        self.assertEqual(1, len(ALERTS.active()))
 
 
 if __name__ == "__main__":

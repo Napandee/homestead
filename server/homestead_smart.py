@@ -156,6 +156,7 @@ def keep_last(node, rows):
 def forget(node):
     with _readings_lock:
         _readings.pop(node, None)
+        _awake.pop(node, None)
 
 
 def reset():
