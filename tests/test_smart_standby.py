@@ -152,6 +152,41 @@ class KeepLastTests(Base):
         row = SMART.keep_last("node-1", {"sda": self.asleep()})["sda"]
         self.assertNotIn("power_on_hours", row)
 
+    def test_a_restart_finds_the_kept_reading_on_the_data_volume(self):
+        SMART.keep_last("node-1", {"sda": dict(AWAKE)})
+        SMART.reset()            # memory only: a restart, or another copy taking over
+        row = SMART.keep_last("node-1", {"sda": self.asleep()})["sda"]
+        self.assertEqual((True, 1200), (row["asleep"], row["power_on_hours"]))
+
+    def test_each_host_keeps_its_own_entry_on_the_data_volume(self):
+        SMART.keep_last("node-1", {"sda": dict(AWAKE)})
+        SMART.reset()
+        SMART.keep_last("node-2", {"sda": dict(AWAKE, power_on_hours=5)})
+        SMART.reset()
+        self.assertEqual(1200, SMART.keep_last("node-1", {"sda": self.asleep()})["sda"]["power_on_hours"])
+        self.assertEqual(5, SMART.keep_last("node-2", {"sda": self.asleep()})["sda"]["power_on_hours"])
+
+    def test_forgetting_a_host_removes_it_from_the_data_volume(self):
+        SMART.keep_last("node-1", {"sda": dict(AWAKE)})
+        SMART.forget("node-1")
+        SMART.reset()
+        row = SMART.keep_last("node-1", {"sda": self.asleep()})["sda"]
+        self.assertNotIn("power_on_hours", row)
+
+    def test_a_data_volume_that_cannot_be_written_does_not_stop_the_reading(self):
+        SMART.SHARED.DIR = "/nonexistent/smart-store"
+        row = SMART.keep_last("node-1", {"sda": dict(AWAKE)})["sda"]
+        self.assertEqual(1200, row["power_on_hours"])
+
+    def test_a_drive_read_by_name_around_a_self_test_is_kept_too(self):
+        SMART.keep_last("node-1", {"sda": dict(AWAKE), "sdb": dict(AWAKE, name="sdb")})
+        fresh = dict(AWAKE, power_on_hours=1300)
+        with mock.patch.object(SMART, "_request", return_value={"disk": fresh}):
+            self.assertEqual(1300, SMART.disk("node-1", "sda")["power_on_hours"])
+        rows = SMART.keep_last("node-1", {"sda": self.asleep(), "sdb": self.asleep("sdb")})
+        self.assertEqual(1300, rows["sda"]["power_on_hours"], "the by-name reading was not kept")
+        self.assertEqual(1200, rows["sdb"]["power_on_hours"], "a by-name reading dropped the other drives")
+
     def test_the_pages_own_read_keeps_the_last_reading_too(self):
         SMART.keep_last("node-1", {"sda": dict(AWAKE)})
         with mock.patch.object(SMART, "inventory", return_value={"disks": [self.asleep()]}):
@@ -235,7 +270,8 @@ class AsleepAlertTests(Base):
         self.tick(self.overview(bad, failing))
         opened = self.tick(self.overview(bad, failing), seconds=90)
         self.assertEqual(["Drive node-1/sda needs attention"], [a["title"] for a in opened])
-        SMART.reset()            # Homestead restarted: no reading kept
+        SMART.reset()            # Homestead restarted on a data volume with no reading kept
+        SMART.SHARED.DIR = tempfile.mkdtemp(dir=self.store)
         row = SMART.keep_last("node-1", {"sda": {"name": "sda", "available": True, "asleep": True}})["sda"]
         self.assertEqual("asleep", NODES.smart_disk_health(row, CFG)["state"])
         for _ in range(5):

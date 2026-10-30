@@ -68,10 +68,14 @@ class Base(unittest.TestCase):
         self.addCleanup(SMART.reset)
         self.now = [1000.0]
         self.helper = Helper()
+        store = tempfile.TemporaryDirectory()
+        self.addCleanup(store.cleanup)
+        self.store = store.name          # the data volume the kept readings live on
         for patch in (mock.patch.object(SMART, "_clock", lambda: self.now[0]),
                       mock.patch.object(SMART.NAMES, "nodeprobe_pods",
                                         lambda namespace: probe_pods("")["items"]),
-                      mock.patch.object(SMART.urllib.request, "urlopen", self.helper.urlopen)):
+                      mock.patch.object(SMART.urllib.request, "urlopen", self.helper.urlopen),
+                      mock.patch.object(SMART.SHARED, "DIR", self.store)):
             patch.start()
             self.addCleanup(patch.stop)
 

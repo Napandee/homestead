@@ -7,8 +7,10 @@ one place so the browser never receives a helper credential.
 """
 import hashlib
 import homestead_names as NAMES
+import homestead_shared as SHARED
 import hmac
 import json
+import os
 import re
 import threading
 import time
@@ -102,7 +104,8 @@ def disk(node, name):
     row = result.get("disk") if isinstance(result, dict) else None
     if not isinstance(row, dict) or row.get("name") != name:
         raise ValueError(f"disk {name} was not found on {node}")
-    return row
+    # Read awake (by name, around a self-test): the reading the drive keeps while it sleeps.
+    return keep_last(node, {name: row}, whole=False)[name]
 
 
 # The Hosts page's SMART view answers from a host's last reading. The probe
@@ -115,6 +118,8 @@ FAILED_SECONDS = 60      # a failed read is answered from memory this long
 _clock = time.monotonic
 _wall = time.time
 _awake = {}              # node -> {name: the drive's last reading taken awake} (#974)
+STORE = "smart-readings.json"   # the same, on the data volume, so a restart or another copy keeps it
+_store_lock = SHARED.SharedLock("smart-readings")
 _readings = {}           # node -> {"at", "keep", "rows": {name: row}, "error"}
 _readings_lock = threading.Lock()
 _reading_locks = [threading.Lock() for _ in range(16)]   # one read per host at a time
@@ -127,17 +132,51 @@ def remember(node, rows, keep=READING_SECONDS):
         _readings[node] = {"at": _clock(), "keep": keep, "rows": dict(rows), "error": None}
 
 
-def keep_last(node, rows):
+def _store_path():
+    return os.path.join(SHARED.DIR, STORE)
+
+
+def _stored(node):
+    """A host's kept readings from the data volume ({} when there are none or it cannot be read)."""
+    try:
+        value = SHARED.read_json(_store_path(), {}).get(node)
+    except Exception:
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _store(node, kept):
+    """Save a host's kept readings (None drops the host). A data volume that
+    cannot be written costs only the readings after a restart."""
+    def change(value):
+        if kept:
+            value[node] = kept
+        else:
+            value.pop(node, None)
+    try:
+        SHARED.update_file(_store_path(), change, _store_lock, {}, separators=(",", ":"))
+    except Exception as error:
+        print(f"SMART readings: not saved: {str(error)[:160]}", flush=True)
+
+
+def keep_last(node, rows, whole=True):
     """A host's rows ({name: row}) with each sleeping drive's last reading kept.
 
     The regular read leaves a drive the host spun down asleep, and the helper
     then has nothing new to say about it. Its last reading taken awake stands
     in, marked asleep, with the temperature unknown: a figure from before it
-    slept says nothing about it now. Drives no longer on the host are
-    forgotten."""
+    slept says nothing about it now. With whole, rows are every drive on the
+    host and drives no longer there are forgotten; otherwise (one drive read
+    by name) the other drives' readings stay. The kept readings live on the
+    data volume too, so a restart or another copy of Homestead has them."""
     with _readings_lock:
+        known = node in _awake
+    stored = None if known else _stored(node)
+    with _readings_lock:
+        if stored is not None and node not in _awake:
+            _awake[node] = stored
         last = _awake.get(node) or {}
-        kept, out = {}, {}
+        kept, out = ({} if whole else dict(last)), {}
         for name, row in rows.items():
             if not isinstance(row, dict) or not row.get("asleep"):
                 if isinstance(row, dict):
@@ -149,7 +188,10 @@ def keep_last(node, rows):
                 out[name] = dict(last[name], asleep=True, temperature_c=None)
             else:
                 out[name] = row
+        changed = kept != last
         _awake[node] = kept
+    if changed:
+        _store(node, kept)
     return out
 
 
@@ -157,10 +199,11 @@ def forget(node):
     with _readings_lock:
         _readings.pop(node, None)
         _awake.pop(node, None)
+    _store(node, None)
 
 
 def reset():
-    """Forget every reading (tests)."""
+    """Forget every reading held in memory (tests; the data volume's copy stays, as across a restart)."""
     with _readings_lock:
         _readings.clear()
         _awake.clear()
