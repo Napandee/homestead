@@ -1,9 +1,10 @@
 """Forced refreshes (?force=1) on reads any viewer may make: the image-update
-scan, the portal's link probes, API discovery and the components' release
-lookups. Each is costly for the cluster, the registries or GitHub, so per
+scan, the portal's link probes, API discovery, the components' release
+lookups and platform detection. Each is costly for the cluster, the registries or GitHub, so per
 key a forced refresh runs one at a time (callers that arrive while it runs
-share its answer) and at most once every MIN_INTERVAL seconds (a forced
-call inside that window gets the last forced answer). A forget of the key,
+share its answer) and at most once every MIN_INTERVAL seconds, or the
+key's own interval (a forced call inside that window gets the last forced
+answer). A forget of the key,
 here or in homestead_cache, ends the window so a change is seen at once.
 Quiet (unforced) reads do not come here."""
 import threading
@@ -33,15 +34,16 @@ def _since(key):
     return max(_forgot.get(key, 0.0), CACHE.forgotten_at(key))
 
 
-def run(key, fn):
+def run(key, fn, interval=None):
     """fn() as a forced refresh under key: shared while it runs, reused for
-    MIN_INTERVAL after it started. Errors reach every caller of that run and
+    interval (default MIN_INTERVAL) seconds after it started. Errors reach every caller of that run and
     are not kept."""
     CACHE.epoch(key)        # from now on homestead_cache records each forget of key
     with _lock:
         now, since = clock(), _since(key)
         kept = _last.get(key)
-        if kept and since < kept[0] and now - kept[0] < MIN_INTERVAL:
+        window = MIN_INTERVAL if interval is None else interval
+        if kept and since < kept[0] and now - kept[0] < window:
             return kept[1]
         flight = _running.get(key)
         mine = flight is None or flight.started <= since
@@ -69,11 +71,12 @@ def run(key, fn):
         flight.done.set()
 
 
-def forget(key):
-    """The next forced call under key runs again (after a write it reads)."""
+def forget(*keys):
+    """The next forced call under each key runs again (after a write it reads)."""
     with _lock:
-        _forgot[key] = clock()
-        _last.pop(key, None)
+        for key in keys:
+            _forgot[key] = clock()
+            _last.pop(key, None)
 
 
 def reset():

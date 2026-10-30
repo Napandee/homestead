@@ -17,6 +17,9 @@ import homestead_operations as OPS
 import homestead_routes as ROUTER
 import homestead_forced as FORCED
 
+# The forced checks' answers (homestead_forced): forgotten when an image or the channel changes.
+FORCED_KEYS = ("image-updates", "image-updates:homestead")
+
 
 kget = ksend = None
 DEFAULT_NS = "lab"
@@ -147,9 +150,9 @@ def _report(request):
     if not force:
         answer = report(False)
     elif only:
-        answer = FORCED.run("image-updates:homestead", homestead_report)
+        answer = FORCED.run(FORCED_KEYS[1], homestead_report)
     else:
-        answer = FORCED.run("image-updates", lambda: report(True))
+        answer = FORCED.run(FORCED_KEYS[0], lambda: report(True))
     answer = json.loads(json.dumps(answer))      # a copy: the forced answer is shared
     answer["policy"] = update_policy_status()
     return answer
@@ -158,7 +161,9 @@ def _report(request):
 def _set_channel(request):
     settings = get_app_settings()
     settings["updates"]["channel"] = request.body.get("channel")
-    return save_app_settings(settings)
+    saved = save_app_settings(settings)
+    FORCED.forget(*FORCED_KEYS)
+    return saved
 
 
 def _set_managed(request):
@@ -183,6 +188,7 @@ def _apply(request, action):
         "/containers?" + urllib.parse.urlencode({"find": b["name"]}),
         {"namespace": b["ns"], "name": b["name"]})
     ROUTER.forget("wl", "ov"); refresh_soon(b["ns"], b["name"])
+    FORCED.forget(*FORCED_KEYS)
     return result
 
 

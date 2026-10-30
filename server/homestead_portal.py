@@ -39,6 +39,8 @@ BUILTIN = ("router", "switch", "wifi", "firewall", "nas", "server", "printer", "
 _status = {"at": 0.0, "value": {}}
 _status_lock = threading.Lock()
 STATUS_TTL = 30
+# A forced link check (TCP probes only) runs at most this often.
+FORCED_INTERVAL = 10
 CHANGED = "The portal links were changed elsewhere since you opened them; open Edit links again to see them"
 
 
@@ -225,7 +227,7 @@ def status(force=False):
     with _status_lock:
         if not force and time.monotonic() - _status["at"] < STATUS_TTL:
             return _status["value"]
-    return FORCED.run("portal-status", _probe) if force else _probe()
+    return FORCED.run("portal-status", _probe, FORCED_INTERVAL) if force else _probe()
 
 
 def _probe():

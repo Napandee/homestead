@@ -202,6 +202,82 @@ class RouteTests(ForcedTestCase):
         self.assertEqual([True, False], scans, "one forced scan; the quiet read is unchanged")
         self.assertEqual([1], homestead)
 
+    def test_portal_status_window_is_shorter(self):
+        import homestead_portal as PORTAL
+        probes = []
+        rows = [{"id": "aaaaaaaa", "url": "http://192.0.2.1"}]
+        with mock.patch.object(PORTAL, "stored", lambda: rows), \
+                mock.patch.object(PORTAL, "_reachable", lambda url: probes.append(url) or {"up": True, "ms": 1}):
+            PORTAL.status(force=True)
+            self.clock.now += PORTAL.FORCED_INTERVAL - 1
+            PORTAL.status(force=True)
+            self.assertEqual(1, len(probes))
+            self.clock.now += 1
+            PORTAL.status(force=True)
+        self.assertEqual(10, PORTAL.FORCED_INTERVAL)
+        self.assertEqual(2, len(probes), "a forced check 10 s later probes again")
+
+    def test_platform_force_detects_once_per_window(self):
+        import homestead_platform as PLATFORM
+        detects = []
+        route = PLATFORM.ROUTES[("GET", "/api/platform")][1]
+        with mock.patch.object(PLATFORM, "detect", lambda force=False: detects.append(force) or {"n": len(detects)}):
+            first = route(request(force="1"))
+            self.assertEqual(first, route(request(force="1")))
+            route(request())
+        self.assertEqual([True, False], detects, "one forced detect; the quiet read is unchanged")
+
+    def image_updates(self):
+        import homestead_updates as U
+        scans = []
+        for name, fake in (("report", lambda force=False: scans.append(force) or {"workloads": []}),
+                           ("homestead_report", lambda: scans.append("homestead") or {"workloads": []}),
+                           ("update_policy_status", lambda: {})):
+            patcher = mock.patch.object(U, name, fake, create=True)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        U._report(request(force="1"))
+        U._report(request(force="1", only="homestead"))
+        self.assertEqual([True, "homestead"], scans)
+        return U, scans
+
+    def assert_forced_checks_run_again(self, U, scans):
+        U._report(request(force="1"))
+        U._report(request(force="1", only="homestead"))
+        self.assertEqual([True, "homestead", True, "homestead"], scans)
+
+    def test_an_applied_update_ends_the_forced_image_update_window(self):
+        U, scans = self.image_updates()
+        fakes = {"guard_managed_smb": lambda ns, name: None, "enforce_update_policy": lambda b: None,
+                 "reviewed_image_update": lambda b, action: {}, "refresh_soon": lambda ns, name: None}
+        for name, fake in fakes.items():
+            patcher = mock.patch.object(U, name, fake, create=True)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        with mock.patch.object(U.OPS, "start", lambda *a, **k: "op"), mock.patch.object(U.ROUTER, "forget", lambda *k: None):
+            U._apply(types.SimpleNamespace(body={"ns": "lab", "name": "web"}, query={}), "update")
+        self.assert_forced_checks_run_again(U, scans)
+
+    def test_a_channel_change_ends_the_forced_image_update_window(self):
+        U, scans = self.image_updates()
+        with mock.patch.object(U, "get_app_settings", lambda: {"updates": {}}, create=True), \
+                mock.patch.object(U, "save_app_settings", lambda settings: {"ok": True}, create=True):
+            U._set_channel(types.SimpleNamespace(body={"channel": "beta"}, query={}))
+        self.assert_forced_checks_run_again(U, scans)
+
+    def test_invalidate_ends_the_forced_image_update_window(self):
+        import homestead_update_checks as CHECKS
+        U, scans = self.image_updates()
+        CHECKS.invalidate()
+        self.assert_forced_checks_run_again(U, scans)
+
+    def test_refresh_one_ends_the_forced_image_update_window(self):
+        import homestead_update_checks as CHECKS
+        U, scans = self.image_updates()
+        with mock.patch.dict(U._LATEST, report=None):
+            CHECKS.refresh_one("lab", "web")       # nothing to refresh, but the app changed
+        self.assert_forced_checks_run_again(U, scans)
+
 
 if __name__ == "__main__":
     unittest.main()
