@@ -22,6 +22,7 @@ rules as the leader's own: not after STALE_AFTER, not after a write here
 forgets or pops its key, and not over a newer read of this replica's own.
 When the leader stops writing, its parts age out and each replica computes
 for itself again, as before."""
+import hashlib
 import json
 import os
 import threading
@@ -48,7 +49,17 @@ _wanted = threading.Event()
 _state = {"last": None, "leader": False}
 # The leader's parts for the other replicas, on the shared data volume.
 FILE = "page-snapshot.json"
-_shared = {"seen": None, "failing": False}   # the file last taken in; whether writing it fails
+# The other replicas ask for it by touching this file whenever they look (at
+# most every ASK_EVERY s); the leader writes only while an ask is under
+# ASK_FRESH s old. One replica (the default) writes nothing.
+WANTED = "page-snapshot.wanted"
+ASK_EVERY = 30
+ASK_FRESH = 120
+# Parts that did not change are written again only this often, so they never
+# go stale for the other replicas (STALE_AFTER).
+REFRESH = STALE_AFTER // 2
+_shared = {"seen": None, "failing": False,   # the file last taken in; whether writing it fails
+           "asked": None, "digest": None, "written": 0.0}
 _floor = {}             # key -> no leader part read before this is taken in (a pop here)
 
 
@@ -64,7 +75,7 @@ def reset():
         _parts.clear()
     _wanted.clear()
     _state.update(last=None, leader=False)
-    _shared.update(seen=None, failing=False)
+    _shared.update(seen=None, failing=False, asked=None, digest=None, written=0.0)
     _floor.clear()
 
 
@@ -165,10 +176,37 @@ def _path():
     return os.path.join(SHARED.DIR, FILE)
 
 
+def _asked(now):
+    """Whether another replica asked for the parts within ASK_FRESH."""
+    try:
+        return now - os.stat(os.path.join(SHARED.DIR, WANTED)).st_mtime < ASK_FRESH
+    except OSError:
+        return False
+
+
+def _ask(now):
+    """On a replica that is not the leader: ask for the parts (a touch of
+    WANTED), at most every ASK_EVERY. Never raises."""
+    asked = _shared["asked"]
+    if asked is not None and now - asked < ASK_EVERY:
+        return
+    _shared["asked"] = now
+    try:
+        path = os.path.join(SHARED.DIR, WANTED)
+        with open(path, "a", encoding="utf-8"):
+            pass
+        os.utime(path, None)
+    except OSError:
+        pass   # e.g. during a move of Homestead's own data: asked again next look
+
+
 def share(now=None):
-    """Write the leader's fresh parts for the other replicas. Never raises:
-    a page they compute for themselves is no worse than before."""
+    """Write the leader's fresh parts for the other replicas, while one asks
+    for them. Never raises: a page they compute for themselves is no worse
+    than before."""
     now = time.time() if now is None else now
+    if not _asked(now):
+        return
     with _lock:
         keys = list(_parts)
     parts = {}
@@ -176,9 +214,13 @@ def share(now=None):
         part = read(key, now)
         if part is not None:
             parts[key] = [part[0], part[1]]
+    digest = hashlib.sha256(json.dumps({k: v[1] for k, v in parts.items()}, sort_keys=True,
+                                       separators=(",", ":"), default=str).encode()).hexdigest()
+    if digest == _shared["digest"] and now - _shared["written"] < REFRESH:
+        return
     try:
         SHARED.write_json(_path(), {"written": now, "parts": parts}, separators=(",", ":"))
-        _shared["failing"] = False
+        _shared.update(failing=False, digest=digest, written=now)
     except Exception as error:
         # During a move of Homestead's own data, writes are held: tried again next cycle.
         if not _shared["failing"]:
@@ -204,6 +246,7 @@ def take_in(now=None):
     before the write. (A newer read of this replica's own in its place is
     no write: the kept-read rule below covers it.)"""
     now = time.time() if now is None else now
+    _ask(time.time())
     with _lock:
         for key, held in list(_parts.items()):
             if CACHE.kept_at(key) is None:

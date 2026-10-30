@@ -38,6 +38,14 @@ class Shared(unittest.TestCase):
         self.runs = []
         self.builders = [("ov", lambda got: {"n": len(self.runs) + 1, "seen": self.runs.append(1)}),
                          ("wl", lambda got: [{"name": "web"}])]
+        self.someone_follows()
+
+    def someone_follows(self, ago=0):
+        """Another replica has asked for the parts (it does on every look)."""
+        wanted = os.path.join(self.tmp.name, self.PAGES.WANTED)
+        open(wanted, "a").close()
+        when = time.time() - ago
+        os.utime(wanted, (when, when))
 
     def path(self):
         return os.path.join(self.tmp.name, self.PAGES.FILE)
@@ -85,6 +93,51 @@ class LeaderWritesTests(Shared):
             self.assertIsNotNone(self.lead_one_cycle(100))
             self.assertIsNotNone(self.lead_one_cycle(200))
         self.assertEqual(1, len([c for c in said.call_args_list if "not shared" in str(c)]))
+
+
+class WhoIsWrittenForTests(Shared):
+    """The file is written only while another replica reads it, and not again
+    for parts that did not change until they would go stale (#914 review:
+    page-snapshot.json written every cycle for nobody with replicas: 1)."""
+    def test_with_no_other_replica_nothing_is_written(self):
+        os.remove(os.path.join(self.tmp.name, self.PAGES.WANTED))
+        self.lead_one_cycle()
+        self.assertFalse(os.path.exists(self.path()))
+
+    def test_an_ask_older_than_ask_fresh_writes_nothing(self):
+        self.someone_follows(ago=self.PAGES.ASK_FRESH + 5)
+        self.lead_one_cycle()
+        self.assertFalse(os.path.exists(self.path()))
+
+    def test_a_follower_asks_when_it_looks(self):
+        os.remove(os.path.join(self.tmp.name, self.PAGES.WANTED))
+        self.PAGES.tick(FOLLOWER, {}, self.builders)
+        self.assertTrue(os.path.exists(os.path.join(self.tmp.name, self.PAGES.WANTED)))
+        self.become_another_replica()
+        self.lead_one_cycle()
+        self.assertEqual({"ov", "wl"}, set(self.written()["parts"]))
+
+    def test_a_follower_asks_at_most_every_ask_every(self):
+        self.PAGES.tick(FOLLOWER, {}, self.builders, now=100)
+        wanted = os.path.join(self.tmp.name, self.PAGES.WANTED)
+        os.utime(wanted, (1000, 1000))
+        self.PAGES.tick(FOLLOWER, {}, self.builders, now=101)
+        self.assertEqual(1000, os.stat(wanted).st_mtime)
+
+    def test_unchanged_parts_are_not_rewritten_until_they_would_go_stale(self):
+        with mock.patch.object(self.PAGES.time, "time", lambda: 1000):
+            self.lead_one_cycle(100)
+        first = os.stat(self.path()).st_ino
+        self.PAGES.share(now=1000 + self.PAGES.REFRESH - 1)
+        self.assertEqual(first, os.stat(self.path()).st_ino)
+
+    def test_unchanged_parts_are_rewritten_before_they_go_stale(self):
+        with mock.patch.object(self.PAGES.time, "time", lambda: 1000):
+            self.lead_one_cycle(100)
+        before = self.written()["written"]
+        self.PAGES.share(now=1000 + self.PAGES.REFRESH)
+        self.assertGreater(self.written()["written"], before)
+        self.assertLess(self.PAGES.REFRESH, self.PAGES.STALE_AFTER)
 
 
 class FollowerReadsTests(Shared):
@@ -202,6 +255,9 @@ class FollowerPagesTests(unittest.TestCase):
         import homestead_storage as STORAGE
         self.enterContext(mock.patch.object(STORAGE.VOLUME_USAGE, "collect", lambda get, claims: {}))
         self.OV = self.cluster.server.OVERVIEW_ROUTES
+        # A follower has asked for the parts (its first look does), so the
+        # leader writes them; with nobody asking it writes nothing.
+        open(os.path.join(self.tmp.name, self.PAGES.WANTED), "a").close()
 
     def test_a_follower_answers_every_page_without_asking_the_cluster(self):
         now = time.time()
