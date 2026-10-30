@@ -120,6 +120,9 @@ _wall = time.time
 _awake = {}              # node -> {name: the drive's last reading taken awake} (#974)
 STORE = "smart-readings.json"   # the same, on the data volume, so a restart or another copy keeps it
 _store_lock = SHARED.SharedLock("smart-readings")
+_host_locks = [threading.Lock() for _ in range(16)]       # one change of a host's kept readings at a time
+_saved_at = {}           # node -> _clock() of its last save
+_store_warned = [""]     # the last save error said, so a broken volume is reported once
 _readings = {}           # node -> {"at", "keep", "rows": {name: row}, "error"}
 _readings_lock = threading.Lock()
 _reading_locks = [threading.Lock() for _ in range(16)]   # one read per host at a time
@@ -145,61 +148,112 @@ def _stored(node):
     return value if isinstance(value, dict) else {}
 
 
+def _newer(row, other):
+    return other if isinstance(other, dict) and int(other.get("read_at") or 0) > int(row.get("read_at") or 0) else row
+
+
 def _store(node, kept):
-    """Save a host's kept readings (None drops the host). A data volume that
+    """Save a host's kept readings (None drops the host) and answer what was
+    saved. Every copy of Homestead reads every host, so a drive's reading
+    another copy saved later is kept over this one's. A data volume that
     cannot be written costs only the readings after a restart."""
     def change(value):
-        if kept:
-            value[node] = kept
-        else:
+        if not kept:
             value.pop(node, None)
+            return {}
+        theirs = value.get(node) if isinstance(value.get(node), dict) else {}
+        value[node] = {name: _newer(row, theirs.get(name)) for name, row in kept.items()}
+        return value[node]
     try:
-        SHARED.update_file(_store_path(), change, _store_lock, {}, separators=(",", ":"))
+        saved = SHARED.update_file(_store_path(), change, _store_lock, {}, separators=(",", ":"))
+        _store_warned[0] = ""
+        return saved
     except Exception as error:
-        print(f"SMART readings: not saved: {str(error)[:160]}", flush=True)
+        said = f"SMART readings: not saved: {str(error)[:160]}"
+        if said != _store_warned[0]:
+            _store_warned[0] = said
+            print(said, flush=True)
+        return kept
 
 
-def keep_last(node, rows, whole=True):
+def _serial(value):
+    return str(value or "").strip().upper()
+
+
+def _same_drive(row, serial):
+    """Whether a kept reading is of the drive now in its slot: the probe's
+    serial for it, when both have one, matches the reading's."""
+    old, new = _serial(row.get("serial")), _serial(serial)
+    return not old or not new or old == new or old in new or new in old
+
+
+def _shape(kept):
+    return {name: _serial(row.get("serial")) for name, row in kept.items()}
+
+
+def keep_last(node, rows, whole=True, serials=None):
     """A host's rows ({name: row}) with each sleeping drive's last reading kept.
 
     The regular read leaves a drive the host spun down asleep, and the helper
     then has nothing new to say about it. Its last reading taken awake stands
     in, marked asleep, with the temperature unknown: a figure from before it
-    slept says nothing about it now. With whole, rows are every drive on the
-    host and drives no longer there are forgotten; otherwise (one drive read
-    by name) the other drives' readings stay. The kept readings live on the
-    data volume too, so a restart or another copy of Homestead has them."""
-    with _readings_lock:
-        known = node in _awake
-    stored = None if known else _stored(node)
-    with _readings_lock:
-        if stored is not None and node not in _awake:
-            _awake[node] = stored
-        last = _awake.get(node) or {}
-        kept, out = ({} if whole else dict(last)), {}
-        for name, row in rows.items():
-            if not isinstance(row, dict) or not row.get("asleep"):
-                if isinstance(row, dict):
-                    row = dict(row, read_at=int(_wall()))
-                    kept[name] = row
-                out[name] = row
-            elif name in last:
-                kept[name] = last[name]
-                out[name] = dict(last[name], asleep=True, temperature_c=None)
-            else:
-                out[name] = row
-        changed = kept != last
-        _awake[node] = kept
-    if changed:
-        _store(node, kept)
+    slept says nothing about it now. A reading whose serial is not the one
+    the probe now sees in that slot (serials, {name: serial}) is of a drive
+    that was replaced, and is dropped. With whole, rows are every drive on
+    the host and drives no longer there are forgotten; otherwise (one drive
+    read by name) the other drives' readings stay.
+
+    The kept readings live on the data volume too, so a restart or another
+    copy of Homestead has them; a host's are saved when its drives change and
+    otherwise at most every READING_SECONDS."""
+    serials = serials or {}
+    with _host_locks[hash(node) % len(_host_locks)]:
+        with _readings_lock:
+            known = node in _awake
+        stored = None if known else _stored(node)
+        with _readings_lock:
+            if stored is not None and node not in _awake:
+                _awake[node] = stored
+            last = _awake.get(node) or {}
+            kept, out = ({} if whole else dict(last)), {}
+            for name, row in rows.items():
+                if not isinstance(row, dict) or not row.get("asleep"):
+                    if isinstance(row, dict):
+                        row = dict(row, read_at=int(_wall()))
+                        kept[name] = row
+                    out[name] = row
+                elif name in last and _same_drive(last[name], serials.get(name)):
+                    kept[name] = last[name]
+                    out[name] = dict(last[name], asleep=True, temperature_c=None)
+                else:
+                    kept.pop(name, None)
+                    out[name] = row
+            due = (_shape(kept) != _shape(last)
+                   or _clock() - _saved_at.get(node, float("-inf")) >= READING_SECONDS)
+            _awake[node] = kept
+        if due and kept != last:
+            saved = _store(node, kept)
+            with _readings_lock:
+                _saved_at[node] = _clock()
+                if _awake.get(node) is kept and isinstance(saved, dict):
+                    _awake[node] = dict(saved)
     return out
 
 
 def forget(node):
+    """Drop a host's last reading, so the next view reads it again (a self-test started or ended)."""
     with _readings_lock:
         _readings.pop(node, None)
-        _awake.pop(node, None)
-    _store(node, None)
+
+
+def drop_host(node):
+    """A host gone from the cluster: its readings, kept ones too, in memory and on the data volume."""
+    with _host_locks[hash(node) % len(_host_locks)]:
+        with _readings_lock:
+            _readings.pop(node, None)
+            _awake.pop(node, None)
+            _saved_at.pop(node, None)
+        _store(node, None)
 
 
 def reset():
@@ -207,6 +261,7 @@ def reset():
     with _readings_lock:
         _readings.clear()
         _awake.clear()
+        _saved_at.clear()
 
 
 def _fresh(node):

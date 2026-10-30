@@ -10,7 +10,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
 sys.path.insert(0, str(ROOT / "tests"))
 
+import contextlib
+import io
 import tempfile
+import threading
+import time
 
 import homestead_alerts as ALERTS
 import homestead_app_settings as APP_SETTINGS
@@ -146,9 +150,9 @@ class KeepLastTests(Base):
         row = SMART.keep_last("node-1", {"sda": self.asleep()})["sda"]
         self.assertNotIn("power_on_hours", row)
 
-    def test_a_host_forgotten_and_read_again_has_no_old_reading(self):
+    def test_a_host_dropped_and_read_again_has_no_old_reading(self):
         SMART.keep_last("node-1", {"sda": dict(AWAKE)})
-        SMART.forget("node-1")
+        SMART.drop_host("node-1")
         row = SMART.keep_last("node-1", {"sda": self.asleep()})["sda"]
         self.assertNotIn("power_on_hours", row)
 
@@ -166,9 +170,9 @@ class KeepLastTests(Base):
         self.assertEqual(1200, SMART.keep_last("node-1", {"sda": self.asleep()})["sda"]["power_on_hours"])
         self.assertEqual(5, SMART.keep_last("node-2", {"sda": self.asleep()})["sda"]["power_on_hours"])
 
-    def test_forgetting_a_host_removes_it_from_the_data_volume(self):
+    def test_dropping_a_host_removes_it_from_the_data_volume(self):
         SMART.keep_last("node-1", {"sda": dict(AWAKE)})
-        SMART.forget("node-1")
+        SMART.drop_host("node-1")
         SMART.reset()
         row = SMART.keep_last("node-1", {"sda": self.asleep()})["sda"]
         self.assertNotIn("power_on_hours", row)
@@ -277,6 +281,127 @@ class AsleepAlertTests(Base):
         for _ in range(5):
             self.assertEqual([], self.tick(self.overview(row)), "the alert cleared on no reading")
         self.assertEqual(1, len(ALERTS.active()))
+
+
+class StoreReviewTests(Base):
+    """The kept readings on the data volume, with several copies of Homestead (#974)."""
+
+    def asleep(self, name="sda"):
+        return {"name": name, "available": True, "asleep": True}
+
+    def stored(self):
+        with open(SMART._store_path()) as handle:
+            return json.load(handle)
+
+    def test_a_newer_reading_another_copy_saved_is_not_overwritten_by_an_older_one(self):
+        with mock.patch.object(SMART, "_wall", lambda: 1000):
+            SMART.keep_last("node-1", {"sda": dict(AWAKE)})
+        other = self.stored()
+        other["node-1"]["sda"] = dict(AWAKE, power_on_hours=1500, read_at=2000)
+        with open(SMART._store_path(), "w") as handle:
+            json.dump(other, handle)
+        with mock.patch.object(SMART, "_wall", lambda: 1100):
+            SMART.keep_last("node-1", {"sda": self.asleep(), "sdb": dict(AWAKE, name="sdb")})
+        saved = self.stored()["node-1"]
+        self.assertEqual((2000, 1500), (saved["sda"]["read_at"], saved["sda"]["power_on_hours"]))
+        self.assertIn("sdb", saved)
+
+    def test_a_self_test_on_one_drive_keeps_the_hosts_other_readings(self):
+        SMART.keep_last("node-1", {"sda": dict(AWAKE), "sdb": dict(AWAKE, name="sdb")})
+        awake = dict(AWAKE, supported_tests=["short"], test={"active": False})
+        with mock.patch.object(SMART, "_request", side_effect=[{"disk": awake}, {"expected_seconds": 60}]):
+            SMART.start_test("node-1", "sda", "short")
+        ref = {"node": "node-1", "disk": "sda", "test": "short", "baseline": "",
+               "started_epoch": int(time.time()), "expected_seconds": 60}
+        with mock.patch.object(SMART, "_request", return_value={"disk": dict(awake, test={"active": True})}):
+            SMART.progress(ref)
+        SMART.reset()
+        rows = SMART.keep_last("node-1", {"sda": self.asleep(), "sdb": self.asleep("sdb")})
+        self.assertEqual(1200, rows["sdb"]["power_on_hours"], "a test on sda dropped sdb's reading")
+
+    def test_progress_polls_do_not_write_the_store_each_time(self):
+        SMART.keep_last("node-1", {"sda": dict(AWAKE)})
+        ref = {"node": "node-1", "disk": "sda", "test": "short", "baseline": "",
+               "started_epoch": int(time.time()), "expected_seconds": 600}
+        running = dict(AWAKE, test={"active": True, "remaining_percent": 50})
+        with mock.patch.object(SMART.SHARED, "update_file", wraps=SMART.SHARED.update_file) as writes, \
+             mock.patch.object(SMART, "_request", return_value={"disk": running}):
+            for step in range(5):
+                self.now[0] += 3
+                SMART.progress(ref)
+        self.assertEqual(0, writes.call_count)
+
+    def test_a_replaced_drive_in_the_same_slot_does_not_inherit_the_old_reading(self):
+        SMART.keep_last("node-1", {"sda": dict(AWAKE, serial="OLD1")}, serials={"sda": "OLD1"})
+        row = SMART.keep_last("node-1", {"sda": self.asleep()}, serials={"sda": "NEW2"})["sda"]
+        self.assertNotIn("power_on_hours", row)
+        self.assertEqual("asleep", NODES.smart_disk_health(row, CFG)["state"])
+        same = SMART.keep_last("node-1", {"sda": self.asleep()}, serials={"sda": ""})["sda"]
+        self.assertNotIn("power_on_hours", same, "the old drive's reading came back")
+
+    def test_a_corrupt_store_is_reported_once(self):
+        with open(SMART._store_path(), "w") as handle:
+            handle.write("{not json")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            for name in ("sda", "sdb", "sdc"):
+                SMART.reset()
+                SMART.keep_last("node-1", {name: dict(AWAKE, name=name)})
+        self.assertEqual(1, out.getvalue().count("SMART readings"), out.getvalue())
+
+
+class ProbeStoreTests(Base):
+    def setUp(self):
+        super().setUp()
+        PROBES.stop()
+        PROBES.reset()
+        self.addCleanup(PROBES.reset)
+        self.pods = probe_pods
+        patch = mock.patch.object(PROBES.NAMES, "kget", lambda path: self.pods(path), create=True)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def test_a_stalled_store_does_not_hold_up_readers_of_the_probe_state(self):
+        release, entered = threading.Event(), threading.Event()
+        def stalled(*_args, **_kw):
+            entered.set()
+            release.wait(5)
+        with mock.patch.object(SMART, "_store", stalled):
+            round_ = threading.Thread(target=PROBES.run_round, kwargs={"now": 1000, "smart": True})
+            round_.start()
+            self.assertTrue(entered.wait(5), "the round never saved")
+            started = time.monotonic()
+            PROBES.status()
+            waited = time.monotonic() - started
+            release.set()
+            round_.join(5)
+        self.assertLess(waited, 0.5, "reading the probe state waited on the SMART store")
+
+    def test_the_loop_compares_the_drives_serial_with_the_probes(self):
+        serial = ["OLD1"]
+        real = self.helper.urlopen
+        def probe(request, timeout=None):
+            if ":9099/" in getattr(request, "full_url", request):
+                return _Response(json.dumps({"disks": [{"name": "sda", "serial": serial[0]}]}).encode())
+            return real(request, timeout)
+        first = ROWS[0]
+        self.addCleanup(ROWS.__setitem__, 0, first)
+        ROWS[0] = dict(first, serial="OLD1")
+        with mock.patch.object(SMART.urllib.request, "urlopen", probe):
+            PROBES.run_round(now=1000, smart=True)
+            self.assertEqual("PASSED", PROBES._state["node-1"]["smart"]["sda"]["health"])
+            ROWS[0] = {"name": "sda", "available": True, "asleep": True}
+            serial[0] = "NEW2"
+            PROBES.run_round(now=1000 + PROBES.SMART_EVERY, smart=True)
+        self.assertNotIn("health", PROBES._state["node-1"]["smart"]["sda"], "the new drive got the old one's reading")
+
+    def test_a_host_gone_from_the_cluster_is_dropped_from_the_store(self):
+        PROBES.run_round(now=1000, smart=True)
+        self.assertIn("node-1", json.load(open(SMART._store_path())))
+        self.pods = lambda path: {"items": []}
+        for step in range(PROBES.GONE_AFTER):
+            PROBES.run_round(now=1100 + step * PROBES.INTERVAL)
+        self.assertNotIn("node-1", json.load(open(SMART._store_path())))
 
 
 if __name__ == "__main__":

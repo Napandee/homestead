@@ -132,6 +132,7 @@ def _run(now, smart):
     ready = {p["spec"]["nodeName"]: p for p in pods if _ready(p)}
     answers = _pool({node: (lambda p=pod: _probe(p)) for node, pod in ready.items()})
     readings = {node: payload for node, (payload, _) in answers.items()}
+    gone = []
     with _lock:
         for node in list(_state):
             if node in listed:
@@ -142,6 +143,7 @@ def _run(now, smart):
                 _state[node]["absent"] += 1
                 if _state[node]["absent"] >= GONE_AFTER:
                     del _state[node]
+                    gone.append(node)
         for node, payload in readings.items():
             entry = _state.setdefault(node, {"payload": None, "at": 0, "misses": 0, "last_ok": None,
                                              "smart": None, "smart_at": 0, "smart_stale": False, "absent": 0})
@@ -157,9 +159,20 @@ def _run(now, smart):
                and (smart or now - _state[node]["smart_at"] >= SMART_EVERY)}
         _round["at"] = now
         _round["read"] = time.monotonic()
+    for node in gone:
+        SMART.drop_host(node)        # its kept SMART readings too, on the data volume
     # The temperatures are recorded before SMART is read, so nobody waits on it.
     _round["done"].set()
     rows = _pool({node: (lambda p=pod: _smart(p)) for node, pod in due.items()})
+    # A drive the host has put to sleep is left asleep by the helper; its last
+    # reading stands in. That may touch the data volume, so it happens outside
+    # _lock: a stalled volume must not hold up the pages reading the probe state.
+    for node, found in rows.items():
+        if found is not None:
+            serials = {disk.get("name"): disk.get("serial")
+                       for disk in ((readings.get(node) or {}).get("disks") or []) if isinstance(disk, dict)}
+            rows[node] = SMART.keep_last(node, found, serials=serials)
+    remembered = {}
     with _lock:
         for node, found in rows.items():
             entry = _state.get(node)
@@ -170,11 +183,11 @@ def _run(now, smart):
                 entry["smart_stale"] = entry["smart"] is not None
                 entry["smart_at"] = now - SMART_EVERY + SMART_RETRY
             else:
-                # A drive the host has put to sleep is left asleep by the helper; its last reading stands in.
-                found = SMART.keep_last(node, found)
                 entry.update(smart=found, smart_at=now, smart_stale=False)
-                # The SMART page answers from this reading until the next one has had time to land.
-                SMART.remember(node, found, keep=SMART_EVERY + SMART_TIMEOUT + INTERVAL)
+                remembered[node] = found
+    for node, found in remembered.items():
+        # The SMART page answers from this reading until the next one has had time to land.
+        SMART.remember(node, found, keep=SMART_EVERY + SMART_TIMEOUT + INTERVAL)
 
 
 def _with_smart(entry):
