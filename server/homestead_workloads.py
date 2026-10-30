@@ -103,6 +103,32 @@ def logs_refusal(error, pod, container):
 # The most a log read asks Kubernetes for (#986): the kubelet splits lines at
 # 16 KB, so 1,000 lines can be 16 MB. Log search reads 2 MB too.
 LOG_BYTES = 2 * 1024 * 1024
+TAIL_RETRIES = 4      # halvings of the lines asked for when an answer reaches LOG_BYTES
+
+
+def _tail(ns, pod, container, lines):
+    """The pod's last lines, at most LOG_BYTES. limitBytes keeps the oldest
+    of the lines asked for, so a live Logs view (Follow) would sit on old
+    lines: an answer that reaches it is asked for again with half the lines,
+    a few times at most, so the newest are kept. A cut says so."""
+    wanted = lines
+    for _ in range(TAIL_RETRIES + 1):
+        query = f"tailLines={lines}&timestamps=true&limitBytes={LOG_BYTES}" + (
+            f"&container={urllib.parse.quote(container)}" if container else "")
+        req = urllib.request.Request(f"{API}/api/v1/namespaces/{ns}/pods/{pod}/log?{query}",
+                                     headers={"Authorization": f"Bearer {TOKEN}"})
+        with urllib.request.urlopen(req, context=CTX, timeout=15) as r:
+            raw = r.read(LOG_BYTES + 1)
+        text = raw.decode("utf-8", "replace")
+        if len(raw) < LOG_BYTES:
+            if lines == wanted:
+                return text
+            return text + f"\n(Log cut: its lines are long, so Homestead is showing the last {lines} lines.)\n"
+        if lines <= 1:
+            break
+        lines = max(1, lines // 2)
+    return text + (f"\n(Log cut at {LOG_BYTES // (1024 * 1024)} MiB of its oldest lines asked for: "
+                   "the newest lines may be missing.)\n")
 
 
 def logs(request):
@@ -142,19 +168,8 @@ def logs(request):
         spec = (found or {}).get("spec", {}) or {}
         names = [c.get("name") for c in spec.get("containers", []) or []]
         container = names[0] if names else ""
-    query = f"tailLines={tail}&timestamps=true&limitBytes={LOG_BYTES}" + (
-        f"&container={urllib.parse.quote(container)}" if container else "")
-    req = urllib.request.Request(f"{API}/api/v1/namespaces/{ns}/pods/{pod}/log?{query}",
-                                 headers={"Authorization": f"Bearer {TOKEN}"})
     try:
-        with urllib.request.urlopen(req, context=CTX, timeout=15) as r:
-            raw = r.read(LOG_BYTES + 1)
-        text = raw.decode("utf-8", "replace")
-        if len(raw) >= LOG_BYTES:
-            # limitBytes keeps the oldest of the lines asked for.
-            text += (f"\n(Homestead read only the first {LOG_BYTES // (1024 * 1024)} MiB of these {tail} lines, "
-                     "so the newest are cut; ask for fewer lines to see them.)\n")
-        return ROUTER.Reply(200, text, "text/plain; charset=utf-8")
+        return ROUTER.Reply(200, _tail(ns, pod, container, tail), "text/plain; charset=utf-8")
     except urllib.error.HTTPError as error:
         return ROUTER.Reply(409 if error.code in (400, 404) else error.code,
                             {"error": logs_refusal(error, pod, container)})
