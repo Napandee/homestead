@@ -128,8 +128,29 @@ class WhoIsWrittenForTests(Shared):
         with mock.patch.object(self.PAGES.time, "time", lambda: 1000):
             self.lead_one_cycle(100)
         first = os.stat(self.path()).st_ino
-        self.PAGES.share(now=1000 + self.PAGES.REFRESH - 1)
+        self.PAGES.share(now=1001)
         self.assertEqual(first, os.stat(self.path()).st_ino)
+
+    def test_unchanged_parts_are_rewritten_a_cycle_before_refresh(self):
+        """share() runs only after a cycle: rewrite on the last one under REFRESH,
+        not the first one past it, or a follower's part ages a whole cycle more."""
+        with mock.patch.object(self.PAGES.time, "time", lambda: 1000):
+            self.lead_one_cycle(100)
+        first = os.stat(self.path()).st_ino
+        self.PAGES.share(now=1000 + self.PAGES.REFRESH - self.PAGES.cadence())
+        self.assertNotEqual(first, os.stat(self.path()).st_ino)
+
+    def test_a_changed_part_is_written_at_once(self):
+        with mock.patch.object(self.PAGES.time, "time", lambda: 1000):
+            self.lead_one_cycle(100)
+        self.builders[1] = ("wl", lambda got: [{"name": "web"}, {"name": "db"}])
+        with mock.patch.object(self.PAGES.time, "time", lambda: 1005):
+            self.lead_one_cycle(100 + self.PAGES.cadence())
+        self.assertEqual([{"name": "web"}, {"name": "db"}], self.written()["parts"]["wl"][1])
+
+    def test_a_part_that_cannot_be_hashed_never_raises(self):
+        self.builders[1] = ("wl", lambda got: {1: "one", "b": 2})   # mixed keys: no sort_keys
+        self.lead_one_cycle()
 
     def test_unchanged_parts_are_rewritten_before_they_go_stale(self):
         with mock.patch.object(self.PAGES.time, "time", lambda: 1000):

@@ -214,9 +214,15 @@ def share(now=None):
         part = read(key, now)
         if part is not None:
             parts[key] = [part[0], part[1]]
-    digest = hashlib.sha256(json.dumps({k: v[1] for k, v in parts.items()}, sort_keys=True,
-                                       separators=(",", ":"), default=str).encode()).hexdigest()
-    if digest == _shared["digest"] and now - _shared["written"] < REFRESH:
+    try:
+        digest = hashlib.sha256(json.dumps({k: v[1] for k, v in parts.items()}, sort_keys=True,
+                                           separators=(",", ":"), default=str).encode()).hexdigest()
+    except (TypeError, ValueError):
+        digest = None    # not comparable (e.g. mixed key types): always written
+    # share() runs after a cycle, so skip only while the next cycle is still
+    # under REFRESH: rewriting on the first cycle past it would age a follower's
+    # part by a whole extra cycle.
+    if digest is not None and digest == _shared["digest"] and now - _shared["written"] + cadence() < REFRESH:
         return
     try:
         SHARED.write_json(_path(), {"written": now, "parts": parts}, separators=(",", ":"))
