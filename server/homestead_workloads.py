@@ -100,6 +100,11 @@ def logs_refusal(error, pod, container):
     return f"Kubernetes could not return the logs for {who}" + (f": {message}" if message else ".")
 
 
+# The most a log read asks Kubernetes for (#986): the kubelet splits lines at
+# 16 KB, so 1,000 lines can be 16 MB. Log search reads 2 MB too.
+LOG_BYTES = 2 * 1024 * 1024
+
+
 def logs(request):
     """A pod's last lines, as text. A job's logs are its pod's."""
     q = request.query
@@ -137,13 +142,19 @@ def logs(request):
         spec = (found or {}).get("spec", {}) or {}
         names = [c.get("name") for c in spec.get("containers", []) or []]
         container = names[0] if names else ""
-    query = f"tailLines={tail}&timestamps=true" + (
+    query = f"tailLines={tail}&timestamps=true&limitBytes={LOG_BYTES}" + (
         f"&container={urllib.parse.quote(container)}" if container else "")
     req = urllib.request.Request(f"{API}/api/v1/namespaces/{ns}/pods/{pod}/log?{query}",
                                  headers={"Authorization": f"Bearer {TOKEN}"})
     try:
         with urllib.request.urlopen(req, context=CTX, timeout=15) as r:
-            return ROUTER.Reply(200, r.read().decode("utf-8", "replace"), "text/plain; charset=utf-8")
+            raw = r.read(LOG_BYTES + 1)
+        text = raw.decode("utf-8", "replace")
+        if len(raw) >= LOG_BYTES:
+            # limitBytes keeps the oldest of the lines asked for.
+            text += (f"\n(Homestead read only the first {LOG_BYTES // (1024 * 1024)} MiB of these {tail} lines, "
+                     "so the newest are cut; ask for fewer lines to see them.)\n")
+        return ROUTER.Reply(200, text, "text/plain; charset=utf-8")
     except urllib.error.HTTPError as error:
         return ROUTER.Reply(409 if error.code in (400, 404) else error.code,
                             {"error": logs_refusal(error, pod, container)})
