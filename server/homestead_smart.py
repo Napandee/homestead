@@ -105,22 +105,24 @@ def disk(node, name):
     return row
 
 
-# The Hosts page's SMART view answers from a reading at most this old. The
-# probe loop reads every host's SMART every five minutes and hands it over
-# (remember), so a page normally reads nothing; a host without one is read
-# once, by one request, and the rest wait for that answer.
-READING_SECONDS = 300
+# The Hosts page's SMART view answers from a host's last reading. The probe
+# loop reads every host's SMART every five minutes and hands it over
+# (remember, saying how long it holds), so a page normally reads nothing; a
+# host without one is read once, by one request, and the rest wait for it.
+READING_SECONDS = 300    # a reading the page took itself
+ACTIVE_SECONDS = 15      # while a self-test runs on the host: the page's refresh, so its progress moves
 FAILED_SECONDS = 60      # a failed read is answered from memory this long
 _clock = time.monotonic
-_readings = {}           # node -> {"at", "rows": {name: row}, "error"}
+_readings = {}           # node -> {"at", "keep", "rows": {name: row}, "error"}
 _readings_lock = threading.Lock()
 _reading_locks = [threading.Lock() for _ in range(16)]   # one read per host at a time
 
 
-def remember(node, rows):
-    """A fresh reading of every drive on a host ({name: row}), from the probe loop."""
+def remember(node, rows, keep=READING_SECONDS):
+    """A fresh reading of every drive on a host ({name: row}), from the probe
+    loop, good for keep seconds."""
     with _readings_lock:
-        _readings[node] = {"at": _clock(), "rows": dict(rows), "error": None}
+        _readings[node] = {"at": _clock(), "keep": keep, "rows": dict(rows), "error": None}
 
 
 def forget(node):
@@ -140,7 +142,13 @@ def _fresh(node):
     if entry is None:
         return None
     age = _clock() - entry["at"]
-    return entry if age < (FAILED_SECONDS if entry["error"] else READING_SECONDS) else None
+    if entry["error"]:
+        keep = FAILED_SECONDS
+    elif any((row.get("test") or {}).get("active") for row in entry["rows"].values()):
+        keep = ACTIVE_SECONDS
+    else:
+        keep = entry["keep"]
+    return entry if age < keep else None
 
 
 def _reading(node):
@@ -152,13 +160,13 @@ def _reading(node):
             if entry is None:
                 try:
                     rows = {row.get("name"): row for row in inventory(node)["disks"]}
-                    entry = {"at": _clock(), "rows": rows, "error": None}
+                    entry = {"at": _clock(), "keep": READING_SECONDS, "rows": rows, "error": None}
                 except Exception as error:
-                    entry = {"at": _clock(), "rows": {}, "error": error}
+                    entry = {"at": _clock(), "keep": FAILED_SECONDS, "rows": {}, "error": error}
                 with _readings_lock:
                     now = _clock()
                     for old in [key for key, row in _readings.items()
-                                if now - row["at"] >= READING_SECONDS]:
+                                if now - row["at"] >= max(row["keep"], READING_SECONDS)]:
                         del _readings[old]
                     _readings[node] = entry
     if entry["error"]:

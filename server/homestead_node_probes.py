@@ -163,7 +163,8 @@ def _run(now, smart):
                 entry["smart_at"] = now - SMART_EVERY + SMART_RETRY
             else:
                 entry.update(smart=found, smart_at=now, smart_stale=False)
-                SMART.remember(node, found)    # the SMART page answers from this reading
+                # The SMART page answers from this reading until the next one has had time to land.
+                SMART.remember(node, found, keep=SMART_EVERY + SMART_TIMEOUT + INTERVAL)
 
 
 def _with_smart(entry):

@@ -152,6 +152,20 @@ class LatestReadingTests(Base):
         SMART.latest("node-1")
         self.assertEqual(2, self.helper.calls)
 
+    def test_while_a_test_runs_the_drive_is_read_again_at_the_pages_pace(self):
+        ROWS[0]["test"] = {"active": True, "remaining_percent": 70}
+        self.addCleanup(ROWS[0].pop, "test")
+        SMART.latest_disk("node-1", "sda")
+        self.now[0] += SMART.ACTIVE_SECONDS
+        SMART.latest_disk("node-1", "sda")
+        self.assertEqual(2, self.helper.calls)
+
+    def test_without_a_test_two_requests_15_s_apart_read_once(self):
+        SMART.latest_disk("node-1", "sda")
+        self.now[0] += 15
+        SMART.latest_disk("node-1", "sda")
+        self.assertEqual(1, self.helper.calls)
+
     def test_the_route_answers_from_the_reading(self):
         request = SimpleNamespace(query={"node": ["node-1"], "disk": ["sda"]})
         with mock.patch.object(NODES, "get_app_settings", return_value={}), \
@@ -179,6 +193,15 @@ class ProbeLoopTests(Base):
         self.assertEqual(1, self.helper.calls)
         self.assertEqual(["sda", "sdb"], [row["name"] for row in SMART.latest("node-1")["disks"]])
         self.assertEqual(1, self.helper.calls)
+
+    def test_the_probe_loops_reading_lasts_until_its_next_one_has_had_time_to_land(self):
+        PROBES.run_round(now=1000, smart=True)
+        self.now[0] += PROBES.SMART_EVERY + PROBES.SMART_TIMEOUT + PROBES.INTERVAL - 1
+        SMART.latest("node-1")
+        self.assertEqual(1, self.helper.calls, "the page read every drive before the loop's next reading was due")
+        self.now[0] += 2
+        SMART.latest("node-1")
+        self.assertEqual(2, self.helper.calls)
 
     def test_the_probe_loops_smart_read_is_signed(self):
         PROBES.run_round(now=1000, smart=True)
@@ -252,6 +275,13 @@ class HelperTests(unittest.TestCase):
         self.assertEqual(403, self.get("/?disk=sda", self.signed(b"GET /"))[0])
         self.assertEqual(403, self.get("/", self.signed(b"GET /", str(int(time.time()) - 120)))[0])
         self.assertEqual([], self.reads)
+
+    def test_the_signature_window_is_30_seconds(self):
+        now = int(time.time())
+        self.assertEqual(200, self.get("/", self.signed(b"GET /", str(now - 29)))[0])
+        self.assertEqual(200, self.get("/", self.signed(b"GET /", str(now + 29)))[0])
+        self.assertEqual(403, self.get("/", self.signed(b"GET /", str(now - 31)))[0])
+        self.assertEqual(403, self.get("/", self.signed(b"GET /", str(now + 31)))[0])
 
     def test_the_health_check_needs_no_signature(self):
         self.assertEqual(200, self.get("/healthz")[0])
