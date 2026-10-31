@@ -251,7 +251,7 @@ class Urls(Base):
         self.assertEqual("https://•••@charts.example.com/stable", chart["repo"])
         self.assertEqual("https://charts.example.com/app-1.0.tgz?token=•••&arch=amd64", chart["chart"])
         api = self.get(API, "viewer")["object"]["spec"]["template"]["spec"]["containers"][0]
-        self.assertEqual(["--notify=https://hooks.example.com/post?sig=•••&room=•••"], api["args"])
+        self.assertEqual(["--notify=https://hooks.example.com/•••"], api["args"])
         self.assertEqual("postgres://•••@db.example.com:5432/app", api["env"][0]["value"])
         self.assertEqual("https://example.com/start?page=2", api["env"][1]["value"], "no credential: shown whole")
         hook = self.get(WEBHOOK, "viewer")["object"]["webhooks"][0]["clientConfig"]["url"]
@@ -801,7 +801,7 @@ class PartialStrip(Base):
 
     def test_a_viewer_sees_the_rest_of_the_address(self):
         api = self.get(API, "viewer")["object"]["spec"]["template"]["spec"]["containers"][0]
-        self.assertEqual(["--notify=https://hooks.example.com/post?sig=•••&room=•••"], api["args"])
+        self.assertEqual(["--notify=https://hooks.example.com/•••"], api["args"])
         self.assertEqual("postgres://•••@db.example.com:5432/app", api["env"][0]["value"])
         self.assertEqual("https://example.com/start?page=2", api["env"][1]["value"])
 
@@ -869,7 +869,7 @@ class FailClosed(Base):
 
     def test_a_secret_in_a_path_is_hidden(self):
         cases = [
-            (SLACK, "XXXX", "https://hooks.slack.com/services/•••"),
+            (SLACK, "XXXX", "https://hooks.slack.com/•••"),
             ("https://discord.com/api/webhooks/123456/abcDEF-ghi_jkl", "abcDEF", "https://discord.com/api/webhooks/•••"),
             ("https://api.telegram.org/bot123456:ABC-DEF1234ghIkl/sendMessage", "ABC-DEF", "https://api.telegram.org/•••"),
             ("https://example.com/hooks/9f8e7d6c5b4a39281706f5e4", "9f8e7d6c", "https://example.com/hooks/•••"),
@@ -898,7 +898,7 @@ class FailClosed(Base):
         self.assertEqual("https://h.example.com/a?page=2&sort=name&q=lights&arch=amd64#top",
                          MASKS.strip_url_secrets("https://h.example.com/a?page=2&sort=name&q=lights&arch=amd64#top"))
         self.assertMasked("https://hooks.example.com/post?room=ops&channel=C123", "ops",
-                          "https://hooks.example.com/post?room=•••&channel=•••")
+                          "https://hooks.example.com/•••")
         self.assertMasked("https://h.example.com/?x=SECRET&page=2", "SECRET", "https://h.example.com/?x=•••&page=2")
         self.assertMasked("https://h.example.com/#k=SECRET", "SECRET", "https://h.example.com/#k=•••")
         self.assertMasked("https://h.example.com/?a1b2c3d4e5f6g7h8i9", "a1b2c3")
@@ -914,8 +914,8 @@ class FailClosed(Base):
         group, version, resource, ns, name = _path_parts(HOOKS_APP)
         viewer = self.get(HOOKS_APP, "viewer")
         container = viewer["object"]["spec"]["template"]["spec"]["containers"][0]
-        self.assertEqual("https://hooks.slack.com/services/•••", container["env"][0]["value"])
-        self.assertEqual("https://gotify.example.com/message?token=•••", container["env"][1]["value"])
+        self.assertEqual("https://hooks.slack.com/•••", container["env"][0]["value"])
+        self.assertEqual("https://gotify.example.com/•••", container["env"][1]["value"])
         self.assertNotIn("XXXX", viewer["yaml"])
         self.assertNotIn("AbCdEf", viewer["yaml"])
         RES.save_object(group, version, resource, ns, name, viewer["yaml"])
@@ -954,11 +954,110 @@ class FailClosed(Base):
         texts = ["https://h.example.com/" + "a1" * (n // 2 - 12), "https://" + "@" * (n - 8), "https://h/?" + "a=1&" * (n // 4 - 3),
                  "https://h/" + "x/" * (n // 2 - 5), ("https://u:p@h.example.com/?token=t " * (n // 36))[:n],
                  '["' + "https:\\/\\/u:p@h " * (n // 20) + '"]', "p" * (n - 9) + " https:/", "{" + '"a":1,' * (n // 6 - 1) + '"b":2}',
-                 "https://h/" + "pa" * (n // 2 - 6), "https://h/?" + "x" * (n - 12), "https://h/#" + "q=1;" * (n // 4 - 3)]
+                 "https://h/" + "pa" * (n // 2 - 6), "https://h/?" + "x" * (n - 12), "https://h/#" + "q=1;" * (n // 4 - 3),
+                 ("u:p@tcp(h) " * (n // 11))[:n], "//@" * (n // 3), ("//u:p@h " * (n // 8))[:n], "@tcp(" * (n // 5)]
         for text in texts:
             self.assertLessEqual(len(text), n)
             best = min(_timed(lambda: MASKS.strip_url_secrets(text)) for _ in range(3))
             self.assertLess(best, 0.1, text[:40])
+
+
+ARGS_APP = "/apis/apps/v1/namespaces/lab/deployments/args"
+ARG_URL = "--url=https://u:p4ssw0rd@h.example.com"
+
+
+class LastPass(Base):
+    """The third pass: notification schemes and hosts, scheme-less logins,
+    and saving an unnamed list a viewer appended to."""
+
+    def setUp(self):
+        extra = {ARGS_APP: {
+            "apiVersion": "apps/v1", "kind": "Deployment",
+            "metadata": {"name": "args", "namespace": "lab", "resourceVersion": "5"},
+            "spec": {"replicas": 1, "template": {"spec": {"containers": [{
+                "name": "app", "image": "example/app:1",
+                "args": [ARG_URL, "-v", ARG_URL.replace("p4ssw0rd", "other")]}]}}}}}
+        patcher = mock.patch.dict(EXTRA, extra)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        super().setUp()
+
+    def assertMasked(self, given, secret, wanted=None):
+        once = MASKS.strip_url_secrets(given)
+        self.assertNotIn(secret, once)
+        self.assertEqual(once, MASKS.strip_url_secrets(once), "stripping twice changes nothing")
+        self.assertTrue(MASKS.has_stripped(once))
+        if wanted is not None:
+            self.assertEqual(wanted, once)
+
+    def test_a_scheme_not_on_the_plain_list_is_hidden_after_its_slashes(self):
+        for given, secret, wanted in (("pbul://o.gn5kj6nfhv736I7jC3cj3QLRiyhgl98b", "gn5kj", "pbul://•••"),
+                                      ("pover://abcdef@apptoken123", "apptoken", "pover://•••"),
+                                      ("gotify://gotify.example.com/AWHJ4c6uZV4OE9N", "AWHJ4", "gotify://•••"),
+                                      ("see TGRAM://bot123:abc/456 now", "abc", "see TGRAM://••• now")):
+            with self.subTest(given=given):
+                self.assertMasked(given, secret, wanted)
+        for shown in ("oci://registry.example.com/charts/app", "redis://cache.example.com:6379/0",
+                      "mongodb+srv://db.example.com/app", "wss://h.example.com/socket"):
+            self.assertEqual(shown, MASKS.strip_url_secrets(shown))
+
+    def test_a_notification_hosts_path_is_hidden_whole(self):
+        for given, secret, wanted in (("https://ntfy.example.com/my-alerts", "my-alerts", "https://ntfy.example.com/•••"),
+                                      ("https://gotify.example.com/short", "short", "https://gotify.example.com/•••"),
+                                      ("https://apprise.example.com/notify/abc", "abc", "https://apprise.example.com/•••"),
+                                      ("https://hooks.example.com/x/y", "x/y", "https://hooks.example.com/•••")):
+            with self.subTest(given=given):
+                self.assertMasked(given, secret, wanted)
+        # The outage module's own mask has nothing left to hide (#942 keeps its annotation).
+        self.assertEqual("https://gotify.example.com/(hidden)", MASKS.strip_url_secrets("https://gotify.example.com/(hidden)"))
+        self.assertEqual("https://ntfy.example.com/", MASKS.strip_url_secrets("https://ntfy.example.com/"))
+
+    def test_a_login_without_a_scheme_is_masked(self):
+        for given, secret, wanted in (("--repo //user:SECRET@host.example.com/x", "SECRET", "--repo //•••@host.example.com/x"),
+                                      ("dsn=user:SECRET@tcp(db.example.com:3306)/app", "SECRET", "•••@tcp(db.example.com:3306)/app"),
+                                      ("user:SECRET@unix(/run/mysql.sock)/app", "SECRET", "•••@unix(/run/mysql.sock)/app"),
+                                      ("1x://user:SECRET@h.example.com", "SECRET", None)):
+            with self.subTest(given=given):
+                self.assertMasked(given, secret, wanted)
+        self.assertEqual("mail admin@example.com", MASKS.strip_url_secrets("mail admin@example.com"))
+        text = "failed: user:SECRET@tcp(db.example.com:3306)/app"
+        for length in range(len(text) + 1):
+            self.assertNotIn("SECRET"[:3], MASKS.strip_url_secrets(MASKS.cut(text, length)), length)
+
+    def test_forms_the_review_named(self):
+        self.assertMasked("HTTPS://U:SECRET@H.EXAMPLE.COM/?TOKEN=T0K", "SECRET", "HTTPS://•••@H.EXAMPLE.COM/?TOKEN=•••")
+        self.assertMasked("https://u:SECRET@[2001:db8::1]:8443/x", "SECRET", "https://•••@[2001:db8::1]:8443/x")
+        self.assertMasked('{"https://u:SECRET@h.example.com":1}', "SECRET", MASKS.JSON_HIDDEN)
+        self.assertMasked('{"u":"https://user:SECRET\\u0040h.example.com/x"}', "SECRET",
+                          '{"u":"https://•••@h.example.com/x"}')
+
+    def _save_args(self, change):
+        group, version, resource, ns, name = _path_parts(ARGS_APP)
+        obj = self.get(ARGS_APP, "viewer")["object"]
+        args = obj["spec"]["template"]["spec"]["containers"][0]["args"]
+        self.assertEqual("--url=https://•••@h.example.com", args[0])
+        change(args)
+        RES.save_object(group, version, resource, ns, name, RES.YAML.dump(obj))
+        return self.c.sent[-1][2]["spec"]["template"]["spec"]["containers"][0]["args"]
+
+    def test_appending_to_an_unnamed_list_keeps_the_stored_values(self):
+        sent = self._save_args(lambda args: args.append("--debug"))
+        self.assertEqual([ARG_URL, "-v", ARG_URL.replace("p4ssw0rd", "other"), "--debug"], sent)
+
+    def test_inserting_at_the_front_never_moves_a_value(self):
+        try:
+            sent = self._save_args(lambda args: args.insert(0, "--debug"))
+        except ValueError as refused:
+            self.assertIn("hidden", str(refused))
+            self.assertEqual([], self.c.sent)
+            return
+        self.assertEqual(["--debug", ARG_URL, "-v", ARG_URL.replace("p4ssw0rd", "other")], sent)
+
+    def test_swapped_identical_masks_restore_by_place(self):
+        def swap(args):
+            args[0], args[2] = args[2], args[0]
+        sent = self._save_args(swap)
+        self.assertEqual([ARG_URL, "-v", ARG_URL.replace("p4ssw0rd", "other")], sent)
 
 
 def _timed(work):

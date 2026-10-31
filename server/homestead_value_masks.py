@@ -7,6 +7,10 @@ can carry a credential outside a Secret.
   - everything before its last "@" is a login: "https://•••@host/path";
   - a parameter (query or fragment) keeps its value only for a harmless
     name (SHOWN_PARAMS: page, sort, q, lang, ...): "?token=•••&page=2";
+  - a scheme not on PLAIN_SCHEMES (pbul://, pover://, gotify://, ...)
+    shows nothing after "scheme://";
+  - a host named for a notification service (NOTIFY_LABELS: ntfy.*,
+    gotify.*, apprise.*, hooks.*) shows no path;
   - from a path segment that holds a secret (after /hooks/, /webhooks/,
     /webhook/ or /services/; a bot<digits>: token; an ntfy.sh topic; a word
     a credential goes by; 16 or more characters that look generated) the
@@ -19,8 +23,14 @@ can carry a credential outside a Secret.
   where its string ends (an annotation Homestead keeps as JSON round-trips);
   with a credential it is written back compact. A key holding one, or a key
   given twice in JSON holding one, hides the whole text (JSON_HIDDEN).
+- A login without a scheme ("//user:pass@host", Go DSNs "user:pass@tcp(",
+  "@unix(") loses everything before its "@" too.
 - Out of scope, as before: a credential that is not in an address
-  ("password: x", "Authorization: Bearer ...") and base64 blobs.
+  ("password: x", "Authorization: Bearer ...") and base64 blobs; and
+  addresses this cannot see: scheme-less forms other than the two above
+  ("user:pass@host:5432/db", "host?token=x", "Server=h;Password=x"), and a
+  scheme that does not start with a letter ("1x://": only "x://..." from
+  the letter on is seen, so its login is still masked).
 - A text longer than MAX_TEXT that holds an address is hidden whole.
 - A copy saved back with a masked text keeps what is stored there, when the
   mask is exactly what the stored text shows (restore(): list items matched
@@ -81,6 +91,25 @@ SHOWN_PARAMS = frozenset(("page", "per_page", "limit", "offset", "sort", "order"
 HOOK_SEGMENTS = frozenset(("hooks", "webhooks", "webhook", "services"))
 BOT = re.compile(r"(?i)bot[0-9]+:")
 TOPIC_HOSTS = frozenset(("ntfy.sh",))
+# A host whose first label names a notification service (self-hosted ntfy,
+# Gotify, Apprise, a hooks.* receiver): its whole path is hidden, however
+# short (a topic or an app token). "/(hidden)" is the outage module's own
+# mask (homestead_outage): nothing is left to hide there.
+NOTIFY_LABELS = frozenset(("ntfy", "gotify", "apprise", "hooks"))
+OWN_MASKS = frozenset(("/(hidden)",))
+# Schemes whose addresses are plain host/path addresses. Any other scheme
+# (Apprise and shoutrrr notification addresses: pbul://, pover://,
+# gotify://, tgram://, ...) can hold a token anywhere, so everything after
+# "scheme://" is hidden.
+PLAIN_SCHEMES = frozenset((
+    "http", "https", "ws", "wss", "ftp", "ftps", "sftp", "git", "ssh", "oci", "file",
+    "postgres", "postgresql", "mysql", "mariadb", "mongodb", "mongodb+srv", "redis", "rediss",
+    "amqp", "amqps", "mqtt", "mqtts", "nats", "jdbc", "s3", "ldap", "ldaps"))
+# Logins without a scheme: "//user:pass@host" and Go DSNs ("user:pass@tcp(",
+# "@unix("). A word (up to ASCII whitespace) holding one loses everything
+# before its "@".
+WORD = re.compile(r"[^ \t\r\n\f\v]+")
+DSN = re.compile(r"@(?:tcp6?|udp6?|unix)\(")
 LONG = 16
 LETTER = re.compile(r"[A-Za-z]")
 DIGIT = re.compile(r"[0-9]")
@@ -168,7 +197,8 @@ def _path_end(path, host):
         if _generated(long.group(0)):
             found.append(long.start())
             break
-    if host.lower() in TOPIC_HOSTS and len(path) > 1:
+    if len(path) > 1 and (host.lower() in TOPIC_HOSTS or host.partition(".")[0].lower() in NOTIFY_LABELS) \
+            and path not in OWN_MASKS:
         found.append(1)
     return path.rfind("/", 0, min(found) + 1) if found else None
 
@@ -179,6 +209,8 @@ def _mask_token(token):
     head = HEAD.match(token)
     shown = head.group(1) + "://"
     body = token[head.end():]
+    if head.group(1).lower() not in PLAIN_SCHEMES:
+        return shown + HIDDEN if body else token
     # Everything before the last "@" is a login, wherever a parser would end
     # the authority ("u:1#x@host", "a:1?@host" and "?next=u:p@host" alike).
     at = body.rfind("@")
@@ -220,12 +252,26 @@ def tokens(text):
         yield first, end
 
 
+def _bare_login(word):
+    """word without a scheme-less login: "//•••@host", "•••@tcp(...)"."""
+    dsn = DSN.search(word)
+    if dsn:
+        return HIDDEN + word[dsn.start():]
+    at = word.rfind("@")
+    slashes = word.find("//", 0, at) if at > 0 else -1
+    return word[:slashes + 2] + HIDDEN + word[at:] if slashes >= 0 else word
+
+
+def _bare(text):
+    return WORD.sub(lambda found: _bare_login(found.group(0)), text) if "@" in text else text
+
+
 def _strip_text(text):
     out, done = [], 0
     for start, end in tokens(text):
-        out += [text[done:start], _mask_token(text[start:end])]
+        out += [_bare(text[done:start]), _mask_token(text[start:end])]
         done = end
-    return "".join(out) + text[done:] if out else text
+    return "".join(out) + _bare(text[done:])
 
 
 class _Pairs(list):
@@ -286,7 +332,7 @@ def strip_url_secrets(text):
     Stripping twice changes nothing."""
     if not isinstance(text, str):
         return text
-    address = ":/" in text or ":\\" in text
+    address = ":/" in text or ":\\" in text or ("@" in text and ("//" in text or DSN.search(text) is not None))
     if len(text) > MAX_TEXT:
         return TOO_LONG if address or "\\u" in text else text      # "\\u002f": an escaped slash
     # JSON first: an escaped address ("https:\\/\\/", "\\u002f") shows
@@ -310,6 +356,13 @@ def cut(text, length, mark="…"):
         if start >= length:
             break
         if end > length:
+            return text[:start] + mark
+    # Nor inside a word holding a login without a scheme.
+    if text[length - 1:length].strip(SPACE) and text[length:length + 1].strip(SPACE):
+        space = SPACE_AT.search(text, length)
+        start = max(text.rfind(c, 0, length) for c in SPACE) + 1
+        word = text[start:space.start() if space else len(text)]
+        if _bare_login(word) != word:
             return text[:start] + mark
     return text[:length]
 
@@ -345,7 +398,7 @@ def has_stripped(value):
         return any(has_stripped(item) for item in value.values())
     if isinstance(value, list):
         return any(has_stripped(item) for item in value)
-    return isinstance(value, str) and (TOO_LONG in value or JSON_HIDDEN in value or (HIDDEN in value and any(
+    return isinstance(value, str) and (TOO_LONG in value or JSON_HIDDEN in value or HIDDEN + "@" in value or (HIDDEN in value and any(
         HIDDEN in value[start:end] for start, end in tokens(value))))
 
 
@@ -381,8 +434,7 @@ def restore(given, stored, at=""):
     exactly what the text at the same place in stored shows below reveal;
     returns the paths put back. List items are matched by a naming field
     (LIST_KEYS) where every item has one; in a list without, an item that
-    holds a mask must be its stored item as shown, at the same place and in
-    a list of the same length. Any other masked text raises ValueError:
+    holds a mask must be its stored item as shown, at the same place. Any other masked text raises ValueError:
     saved, the mask would replace the credential."""
     put = []
     if isinstance(given, dict):
@@ -393,8 +445,10 @@ def restore(given, stored, at=""):
             by_name = {item[field]: item for item in stored}
             pairs = [(index, item, by_name.get(item[field])) for index, item in enumerate(given)]
         else:
-            same = isinstance(stored, list) and len(stored) == len(given)
-            pairs = [(index, item, stored[index] if same else None) for index, item in enumerate(given)]
+            # By place: an item added after the stored ones holds no mask, and
+            # one added before shifts the masks, which then match nothing.
+            known = len(stored) if isinstance(stored, list) else 0
+            pairs = [(index, item, stored[index] if index < known else None) for index, item in enumerate(given)]
             for index, item, other in pairs:
                 if not isinstance(item, str) and has_stripped(item):
                     if other is None or _shown(other) != item:
