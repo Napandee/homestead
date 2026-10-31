@@ -269,15 +269,22 @@ def tokens(text):
 def _bare_login(word):
     """word without a scheme-less login: "//•••@host", "•••@tcp(...)". The
     login ends at the last "@tcp(" (a password may hold one) or, after
-    "//", at the last "@": whichever is later."""
+    "//", at the last "@": whichever is later. Everything before it is
+    hidden too; only a "//" that starts the word or follows a separator
+    ("--repo=//•••@host", the mid-word rule's separators) is kept, and
+    never in a DSN."""
     dsn = -1
     for found in DSN.finditer(word):
         dsn = found.start()
     at = word.rfind("@")
     slashes = word.find("//", 0, at) if at > 0 else -1
-    if slashes >= 0:
-        return word[:slashes + 2] + HIDDEN + word[max(at, dsn):]
-    return HIDDEN + word[dsn:] if dsn >= 0 else word
+    if slashes < 0:
+        return HIDDEN + word[dsn:] if dsn >= 0 else word
+    login = max(at, dsn)
+    prefix = word[:slashes]
+    if dsn < 0 and not PREFIX_MARK.search(prefix) and (not prefix or prefix[-1] not in SCHEME):
+        return word[:slashes + 2] + HIDDEN + word[login:]
+    return HIDDEN + word[login:]
 
 
 def _bare(text):

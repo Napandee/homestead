@@ -1085,6 +1085,15 @@ class SecurityReview(unittest.TestCase):
         self.assertEqual("--repo=https://•••@h.example.com/x", MASKS.strip_url_secrets("--repo=https://u:p@h.example.com/x"))
         self.assertEqual("(https://h.example.com/x)", MASKS.strip_url_secrets("(https://h.example.com/x)"))
 
+    def test_nothing_before_a_scheme_less_login_shows_unless_it_is_a_separator(self):
+        for given, wanted in (("user:SECRET//x@tcp(db.example.com)/app", "•••@tcp(db.example.com)/app"),
+                              ("a:SECRET//c:d@host.example.com", "•••@host.example.com"),
+                              ("user.SECRET//c:d@host.example.com", "•••@host.example.com"),
+                              ("--repo=//u:SECRET@host.example.com", "--repo=//•••@host.example.com"),
+                              ("//u:SECRET@host.example.com", "//•••@host.example.com")):
+            with self.subTest(given=given):
+                self.assertEqual(wanted, self.assertMasked(given, "SECRET"))
+
     def test_a_text_with_too_many_addresses_is_hidden_whole(self):
         many = "https://u:SECRET@h.example.com/x " * (MASKS.MAX_ADDRESSES + 1)
         self.assertEqual(MASKS.TOO_MANY, MASKS.strip_url_secrets(many))
