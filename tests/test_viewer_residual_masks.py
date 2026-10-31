@@ -955,7 +955,9 @@ class FailClosed(Base):
                  "https://h/" + "x/" * (n // 2 - 5), ("https://u:p@h.example.com/?token=t " * (n // 36))[:n],
                  '["' + "https:\\/\\/u:p@h " * (n // 20) + '"]', "p" * (n - 9) + " https:/", "{" + '"a":1,' * (n // 6 - 1) + '"b":2}',
                  "https://h/" + "pa" * (n // 2 - 6), "https://h/?" + "x" * (n - 12), "https://h/#" + "q=1;" * (n // 4 - 3),
-                 ("u:p@tcp(h) " * (n // 11))[:n], "//@" * (n // 3), ("//u:p@h " * (n // 8))[:n], "@tcp(" * (n // 5)]
+                 ("u:p@tcp(h) " * (n // 11))[:n], "//@" * (n // 3), ("//u:p@h " * (n // 8))[:n], "@tcp(" * (n // 5),
+                 ("a=https://h " * (n // 12))[:n], ("u@x://h " * (n // 8))[:n], "x" * (n - 20) + "@x://h",
+                 ("https://h/a?x=1&y=2;z#q " * (MASKS.MAX_ADDRESSES - 8)).ljust(n, "x")[:n]]
         for text in texts:
             self.assertLessEqual(len(text), n)
             best = min(_timed(lambda: MASKS.strip_url_secrets(text)) for _ in range(3))
@@ -1058,6 +1060,42 @@ class LastPass(Base):
             args[0], args[2] = args[2], args[0]
         sent = self._save_args(swap)
         self.assertEqual([ARG_URL, "-v", ARG_URL.replace("p4ssw0rd", "other")], sent)
+
+
+class SecurityReview(unittest.TestCase):
+    """The automated review of 7e5d0bb0: a scheme starting inside a word, and
+    a Go DSN with "@tcp(" twice."""
+
+    def assertMasked(self, given, secret):
+        once = MASKS.strip_url_secrets(given)
+        self.assertNotIn(secret, once)
+        self.assertEqual(once, MASKS.strip_url_secrets(once), "stripping twice changes nothing")
+        self.assertTrue(MASKS.has_stripped(once))
+        return once
+
+    def test_a_scheme_inside_a_word_hides_the_word(self):
+        for given in ("user:SECRET@x://h", "//user:SECRET@evil.example:x://h", "see user:SECRET@https://h.example.com/ now",
+                      "//user:SECRET:x://h@y", "a/user:SECRET:https://h.example.com"):
+            with self.subTest(given=given):
+                self.assertMasked(given, "SECRET")
+        text = "failed: user:SECRET@x://h.example.com/a"
+        for length in range(len(text) + 1):
+            self.assertNotIn("SEC", MASKS.strip_url_secrets(MASKS.cut(text, length)), length)
+        # A scheme after a separator is still read as an address of its own.
+        self.assertEqual("--repo=https://•••@h.example.com/x", MASKS.strip_url_secrets("--repo=https://u:p@h.example.com/x"))
+        self.assertEqual("(https://h.example.com/x)", MASKS.strip_url_secrets("(https://h.example.com/x)"))
+
+    def test_a_text_with_too_many_addresses_is_hidden_whole(self):
+        many = "https://u:SECRET@h.example.com/x " * (MASKS.MAX_ADDRESSES + 1)
+        self.assertEqual(MASKS.TOO_MANY, MASKS.strip_url_secrets(many))
+        self.assertTrue(MASKS.has_stripped(MASKS.TOO_MANY))
+        few = "https://u:SECRET@h.example.com/x " * 100
+        self.assertEqual("https://•••@h.example.com/x " * 100, MASKS.strip_url_secrets(few))
+
+    def test_a_dsn_is_masked_up_to_its_last_at(self):
+        once = self.assertMasked("user:p@tcp(x)ss@tcp(db.example.com:3306)/app", "ss@")
+        self.assertEqual("•••@tcp(db.example.com:3306)/app", once)
+        self.assertMasked("//u:p@tcp(x)SECRET@h.example.com/x", "SECRET")
 
 
 def _timed(work):

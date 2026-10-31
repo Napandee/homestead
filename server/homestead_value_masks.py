@@ -24,14 +24,17 @@ can carry a credential outside a Secret.
   with a credential it is written back compact. A key holding one, or a key
   given twice in JSON holding one, hides the whole text (JSON_HIDDEN).
 - A login without a scheme ("//user:pass@host", Go DSNs "user:pass@tcp(",
-  "@unix(") loses everything before its "@" too.
+  "@unix(") loses everything before its last "@" (or last "@tcp(") too.
+- An address that starts inside a word ("user:pass@x://h", "a:https://h")
+  hides the whole word: what comes before it may be a login.
 - Out of scope, as before: a credential that is not in an address
   ("password: x", "Authorization: Bearer ...") and base64 blobs; and
   addresses this cannot see: scheme-less forms other than the two above
   ("user:pass@host:5432/db", "host?token=x", "Server=h;Password=x"), and a
   scheme that does not start with a letter ("1x://": only "x://..." from
   the letter on is seen, so its login is still masked).
-- A text longer than MAX_TEXT that holds an address is hidden whole.
+- A text longer than MAX_TEXT that holds an address, or holding more than
+  MAX_ADDRESSES of them, is hidden whole.
 - A copy saved back with a masked text keeps what is stored there, when the
   mask is exactly what the stored text shows (restore(): list items matched
   by their name, LIST_KEYS); any other masked text is refused, so the mask
@@ -132,9 +135,16 @@ PARTS = re.compile(r"([?&;#])")
 # A longer text holding an address is hidden whole rather than checked.
 MAX_TEXT = 256 * 1024
 TOO_LONG = f"{HIDDEN} (hidden: too long to check for credentials)"
+# A text holding more addresses than this is hidden whole too: each costs a
+# few microseconds, and anyone who can write an event writes the text.
+MAX_ADDRESSES = 2048
+TOO_MANY = f"{HIDDEN} (hidden: too many addresses to check for credentials)"
 # JSON whose credential cannot be masked in part (a key given twice, or a
 # key holding one) is hidden whole.
 JSON_HIDDEN = f"{HIDDEN} (hidden: JSON holding a credential that cannot be masked in part)"
+# A word with an address starting inside it, hidden whole.
+MID_WORD = f"{HIDDEN}://{HIDDEN}"
+PREFIX_MARK = re.compile(r"[@:/\\]")
 # The k3s and RKE2 Helm controller: its Job's pods carry the chart's label,
 # and the Jobs are named for what they do. Rancher runs helm in
 # cattle-system's helm-operation-* pods.
@@ -169,6 +179,8 @@ def _query(text):
     value only for a name in SHOWN_PARAMS (and a plain value), every other
     value is name=•••; from a name that is not plain or a bare word that
     looks like a secret, the rest is hidden."""
+    if not text:
+        return text
     out = []
     for index, piece in enumerate(PARTS.split(text)):
         if index % 2 or not piece:
@@ -186,6 +198,8 @@ def _path_end(path, host):
     """Where the hidden rest of a path starts (the "/" before the first
     segment that is not plain or holds a secret), or None. Searches the whole
     path at once, so a path of many segments costs no more than one."""
+    if len(path) <= 1:
+        return None
     found = [hit.start() for hit in (PATH_ODD.search(path), BOT_SEGMENT.search(path)) if hit]
     word = _secret_word(path)
     if word >= 0:
@@ -253,23 +267,54 @@ def tokens(text):
 
 
 def _bare_login(word):
-    """word without a scheme-less login: "//•••@host", "•••@tcp(...)"."""
-    dsn = DSN.search(word)
-    if dsn:
-        return HIDDEN + word[dsn.start():]
+    """word without a scheme-less login: "//•••@host", "•••@tcp(...)". The
+    login ends at the last "@tcp(" (a password may hold one) or, after
+    "//", at the last "@": whichever is later."""
+    dsn = -1
+    for found in DSN.finditer(word):
+        dsn = found.start()
     at = word.rfind("@")
     slashes = word.find("//", 0, at) if at > 0 else -1
-    return word[:slashes + 2] + HIDDEN + word[at:] if slashes >= 0 else word
+    if slashes >= 0:
+        return word[:slashes + 2] + HIDDEN + word[max(at, dsn):]
+    return HIDDEN + word[dsn:] if dsn >= 0 else word
 
 
 def _bare(text):
     return WORD.sub(lambda found: _bare_login(found.group(0)), text) if "@" in text else text
 
 
+def _strip_word(word, start=None):
+    """One whitespace-delimited word. An address that starts inside the word
+    (after "@", ":", "/" or "\\", or after scheme characters) is not one a
+    parser reads on its own: the whole word is hidden (MID_WORD), since
+    what comes before it may be a login. After a separator ("--repo=",
+    a quote, a bracket) the address is masked as usual."""
+    if start is None:
+        start = next((first for first, _ in tokens(word)), None)
+    if start is not None:
+        prefix = word[:start]
+        if start and (PREFIX_MARK.search(prefix) or prefix[-1] in SCHEME):
+            return MID_WORD
+        return prefix + _mask_token(word[start:])
+    return _bare_login(word)
+
+
+def _word_start(text, low, at):
+    """Where the word holding text[at] starts, not before low."""
+    first = at
+    while first > low and at - first < 64:          # most prefixes are short ("--repo=", a quote)
+        if text[first - 1] in SPACE:
+            return first
+        first -= 1
+    return max(low, max(text.rfind(space, low, first) for space in SPACE) + 1)
+
+
 def _strip_text(text):
     out, done = [], 0
     for start, end in tokens(text):
-        out += [_bare(text[done:start]), _mask_token(text[start:end])]
+        word = _word_start(text, done, start)
+        out += [_bare(text[done:word]), _strip_word(text[word:end], start - word)]
         done = end
     return "".join(out) + _bare(text[done:])
 
@@ -335,6 +380,8 @@ def strip_url_secrets(text):
     address = ":/" in text or ":\\" in text or ("@" in text and ("//" in text or DSN.search(text) is not None))
     if len(text) > MAX_TEXT:
         return TOO_LONG if address or "\\u" in text else text      # "\\u002f": an escaped slash
+    if address and text.count(":/") + text.count(":\\") + text.count("\\u00") + text.count("@") > MAX_ADDRESSES:
+        return TOO_MANY
     # JSON first: an escaped address ("https:\\/\\/", "\\u002f") shows
     # only once decoded.
     if text.lstrip(SPACE)[:1] in ("{", "["):
@@ -356,13 +403,14 @@ def cut(text, length, mark="…"):
         if start >= length:
             break
         if end > length:
-            return text[:start] + mark
-    # Nor inside a word holding a login without a scheme.
+            return text[:_word_start(text, 0, start)] + mark      # with its word: a prefix may be a login
+    # Nor inside a word that stripping would change (a login without a
+    # scheme, an address starting inside the word).
     if text[length - 1:length].strip(SPACE) and text[length:length + 1].strip(SPACE):
         space = SPACE_AT.search(text, length)
-        start = max(text.rfind(c, 0, length) for c in SPACE) + 1
+        start = _word_start(text, 0, length)
         word = text[start:space.start() if space else len(text)]
-        if _bare_login(word) != word:
+        if _strip_word(word) != word:
             return text[:start] + mark
     return text[:length]
 
@@ -398,7 +446,7 @@ def has_stripped(value):
         return any(has_stripped(item) for item in value.values())
     if isinstance(value, list):
         return any(has_stripped(item) for item in value)
-    return isinstance(value, str) and (TOO_LONG in value or JSON_HIDDEN in value or HIDDEN + "@" in value or (HIDDEN in value and any(
+    return isinstance(value, str) and (TOO_LONG in value or TOO_MANY in value or JSON_HIDDEN in value or HIDDEN + "@" in value or MID_WORD in value or (HIDDEN in value and any(
         HIDDEN in value[start:end] for start, end in tokens(value))))
 
 
