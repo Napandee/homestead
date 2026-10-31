@@ -251,7 +251,7 @@ class Urls(Base):
         self.assertEqual("https://•••@charts.example.com/stable", chart["repo"])
         self.assertEqual("https://charts.example.com/app-1.0.tgz?token=•••&arch=amd64", chart["chart"])
         api = self.get(API, "viewer")["object"]["spec"]["template"]["spec"]["containers"][0]
-        self.assertEqual(["--notify=https://hooks.example.com/post?sig=•••&room=ops"], api["args"])
+        self.assertEqual(["--notify=https://hooks.example.com/post?sig=•••&room=•••"], api["args"])
         self.assertEqual("postgres://•••@db.example.com:5432/app", api["env"][0]["value"])
         self.assertEqual("https://example.com/start?page=2", api["env"][1]["value"], "no credential: shown whole")
         hook = self.get(WEBHOOK, "viewer")["object"]["webhooks"][0]["clientConfig"]["url"]
@@ -768,7 +768,7 @@ class PartialStrip(Base):
                 "https://x.example.com/a?X-Amz-Signature=•••&X-Amz-Credential=•••",
             "see https://u:p@a.example.com and git://b.example.com?api_key=k1":
                 "see https://•••@a.example.com and git://b.example.com?api_key=•••",
-            "https://app.example.com/cb#access_token=abc123&x=1": "https://app.example.com/cb#access_token=•••&x=1",
+            "https://app.example.com/cb#access_token=abc123&x=1": "https://app.example.com/cb#access_token=•••&x=•••",
             "postgres://app:hunter2@db.example.com:5432/app": "postgres://•••@db.example.com:5432/app",
             '{"url":"https://u:p@h.example.com/x","n":1}': '{"url":"https://•••@h.example.com/x","n":1}',
         }
@@ -801,7 +801,7 @@ class PartialStrip(Base):
 
     def test_a_viewer_sees_the_rest_of_the_address(self):
         api = self.get(API, "viewer")["object"]["spec"]["template"]["spec"]["containers"][0]
-        self.assertEqual(["--notify=https://hooks.example.com/post?sig=•••&room=ops"], api["args"])
+        self.assertEqual(["--notify=https://hooks.example.com/post?sig=•••&room=•••"], api["args"])
         self.assertEqual("postgres://•••@db.example.com:5432/app", api["env"][0]["value"])
         self.assertEqual("https://example.com/start?page=2", api["env"][1]["value"])
 
@@ -832,6 +832,139 @@ class PartialStrip(Base):
         self.assertEqual(OUTAGE_JSON, viewer["object"]["metadata"]["annotations"]["homestead.io/outage-actions"])
         RES.save_object(group, version, resource, ns, name, viewer["yaml"])
         self.assertEqual(OUTAGE_JSON, self.c.sent[-1][2]["metadata"]["annotations"]["homestead.io/outage-actions"])
+
+
+# Built in pieces so secret scanners do not read the fixture as a real webhook.
+SLACK = "https://hooks.slack.com/services/" + "T0000AAAA/B0000BBBB/" + "X" * 24
+GOTIFY = "https://gotify.example.com/message?token=AbCdEf123456"
+HOOKS_APP = "/apis/apps/v1/namespaces/lab/deployments/hooks"
+
+
+class FailClosed(Base):
+    """The second pass: secrets in a path, JSON with escapes or a key given
+    twice, every parameter value but a few harmless names, an "@" anywhere,
+    and list items matched by their name when a copy is saved back."""
+
+    def setUp(self):
+        extra = {HOOKS_APP: {
+            "apiVersion": "apps/v1", "kind": "Deployment",
+            "metadata": {"name": "hooks", "namespace": "lab", "resourceVersion": "5"},
+            "spec": {"replicas": 1, "template": {"spec": {"containers": [{
+                "name": "notify", "image": "example/notify:1",
+                "env": [{"name": "SLACK_URL", "value": SLACK}, {"name": "GOTIFY_URL", "value": GOTIFY},
+                        {"name": "OTHER_SLACK", "value": SLACK.replace("XXXX", "YYYY")}],
+                "args": [SLACK, GOTIFY]}]}}}}}
+        patcher = mock.patch.dict(EXTRA, extra)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        super().setUp()
+
+    def assertMasked(self, given, secret, wanted=None):
+        once = MASKS.strip_url_secrets(given)
+        self.assertNotIn(secret, once)
+        self.assertEqual(once, MASKS.strip_url_secrets(once), "stripping twice changes nothing")
+        self.assertTrue(MASKS.has_stripped(once))
+        if wanted is not None:
+            self.assertEqual(wanted, once)
+
+    def test_a_secret_in_a_path_is_hidden(self):
+        cases = [
+            (SLACK, "XXXX", "https://hooks.slack.com/services/•••"),
+            ("https://discord.com/api/webhooks/123456/abcDEF-ghi_jkl", "abcDEF", "https://discord.com/api/webhooks/•••"),
+            ("https://api.telegram.org/bot123456:ABC-DEF1234ghIkl/sendMessage", "ABC-DEF", "https://api.telegram.org/•••"),
+            ("https://example.com/hooks/9f8e7d6c5b4a39281706f5e4", "9f8e7d6c", "https://example.com/hooks/•••"),
+            ("https://example.com/webhook/abc", "abc", "https://example.com/webhook/•••"),
+            ("https://ntfy.sh/my-alerts-topic", "my-alerts", "https://ntfy.sh/•••"),
+            ("https://example.com/x/a1b2c3d4e5f6g7h8i9/y", "a1b2c3", "https://example.com/x/•••"),
+            ("https://example.com/x/deadbeefcafebabe00", "deadbeef", "https://example.com/x/•••"),
+            ("https://example.com/x/QWxhZGRpbjpPcGVuU2VzYW1l", "QWxh", "https://example.com/x/•••"),
+        ]
+        for given, secret, wanted in cases:
+            with self.subTest(given=given):
+                self.assertMasked(given, secret, wanted)
+        for shown in ("https://charts.example.com/stable/app-1.0.tgz", "https://example.com/api/v1/items",
+                      "https://gotify.example.com/(hidden)", "https://hooks.slack.com/(hidden)"):
+            self.assertEqual(shown, MASKS.strip_url_secrets(shown))
+
+    def test_json_with_escaped_slashes_or_a_key_given_twice(self):
+        self.assertMasked('{"w":"https:\\/\\/user:pass@host.example.com"}', "pass")
+        self.assertMasked('{"a":"x","a":"https://user:pass@host.example.com"}', "pass", MASKS.JSON_HIDDEN)
+        self.assertMasked('{"a":"x","a":"y","b":"https://h.example.com/?token=SECRET"}', "SECRET", MASKS.JSON_HIDDEN)
+        self.assertMasked('["https:\\u002f\\u002fuser:pass@h.example.com"]', "pass")
+        plain = '{"a":"x","a":"y"}'
+        self.assertEqual(plain, MASKS.strip_url_secrets(plain), "nothing to hide: a key given twice stays")
+
+    def test_only_a_few_harmless_parameters_show_their_value(self):
+        self.assertEqual("https://h.example.com/a?page=2&sort=name&q=lights&arch=amd64#top",
+                         MASKS.strip_url_secrets("https://h.example.com/a?page=2&sort=name&q=lights&arch=amd64#top"))
+        self.assertMasked("https://hooks.example.com/post?room=ops&channel=C123", "ops",
+                          "https://hooks.example.com/post?room=•••&channel=•••")
+        self.assertMasked("https://h.example.com/?x=SECRET&page=2", "SECRET", "https://h.example.com/?x=•••&page=2")
+        self.assertMasked("https://h.example.com/#k=SECRET", "SECRET", "https://h.example.com/#k=•••")
+        self.assertMasked("https://h.example.com/?a1b2c3d4e5f6g7h8i9", "a1b2c3")
+
+    def test_everything_before_the_last_at_is_a_login(self):
+        for given, secret in (("https://u:123#x@host.example.com", "123"), ("https://admin:12345?@host.example.com/", "12345"),
+                              ("https://h.example.com/a?next=u:SECRET@b.example.com", "SECRET")):
+            with self.subTest(given=given):
+                self.assertMasked(given, secret)
+                self.assertTrue(MASKS.strip_url_secrets(given).startswith("https://•••@"))
+
+    def test_slack_and_gotify_addresses_round_trip_through_a_viewers_copy(self):
+        group, version, resource, ns, name = _path_parts(HOOKS_APP)
+        viewer = self.get(HOOKS_APP, "viewer")
+        container = viewer["object"]["spec"]["template"]["spec"]["containers"][0]
+        self.assertEqual("https://hooks.slack.com/services/•••", container["env"][0]["value"])
+        self.assertEqual("https://gotify.example.com/message?token=•••", container["env"][1]["value"])
+        self.assertNotIn("XXXX", viewer["yaml"])
+        self.assertNotIn("AbCdEf", viewer["yaml"])
+        RES.save_object(group, version, resource, ns, name, viewer["yaml"])
+        sent = self.c.sent[-1][2]["spec"]["template"]["spec"]["containers"][0]
+        self.assertEqual([SLACK, GOTIFY, SLACK.replace("XXXX", "YYYY")], [e["value"] for e in sent["env"]])
+        self.assertEqual([SLACK, GOTIFY], sent["args"])
+
+    def test_a_list_item_keeps_its_own_value_by_its_name(self):
+        group, version, resource, ns, name = _path_parts(HOOKS_APP)
+        viewer = self.get(HOOKS_APP, "viewer")
+        obj = viewer["object"]
+        env = obj["spec"]["template"]["spec"]["containers"][0]["env"]
+        env.reverse()           # the two Slack addresses look the same masked
+        RES.save_object(group, version, resource, ns, name, RES.YAML.dump(obj))
+        sent = self.c.sent[-1][2]["spec"]["template"]["spec"]["containers"][0]["env"]
+        self.assertEqual({"SLACK_URL": SLACK, "GOTIFY_URL": GOTIFY, "OTHER_SLACK": SLACK.replace("XXXX", "YYYY")},
+                         {e["name"]: e["value"] for e in sent})
+
+    def test_a_reordered_list_without_names_is_refused(self):
+        group, version, resource, ns, name = _path_parts(HOOKS_APP)
+        obj = self.get(HOOKS_APP, "viewer")["object"]
+        obj["spec"]["template"]["spec"]["containers"][0]["args"].reverse()
+        with self.assertRaisesRegex(ValueError, "hidden"):
+            RES.save_object(group, version, resource, ns, name, RES.YAML.dump(obj))
+        self.assertEqual([], self.c.sent)
+
+    def test_the_fast_token_scan_finds_what_the_pattern_finds(self):
+        texts = list(REVIEW_FORMS) + ["a" * 40 + "://x", "1a" * 20 + "://x b://y", "x://a://b c:/d :/e", "-+a.b://x\ty",
+                                      "ab:x ab://y", "é" + "a" * 31 + "://x", "a:/" * 50, 'a://"' * 30, "ſ://x K://y", ""]
+        for text in texts:
+            with self.subTest(text=text[:40]):
+                self.assertEqual([m.span() for m in MASKS.TOKEN.finditer(text)], list(MASKS.tokens(text)))
+
+    def test_a_256_kb_text_is_checked_in_under_a_tenth_of_a_second(self):
+        n = MASKS.MAX_TEXT
+        texts = ["https://h.example.com/" + "a1" * (n // 2 - 12), "https://" + "@" * (n - 8), "https://h/?" + "a=1&" * (n // 4 - 3),
+                 "https://h/" + "x/" * (n // 2 - 5), ("https://u:p@h.example.com/?token=t " * (n // 36))[:n],
+                 '["' + "https:\\/\\/u:p@h " * (n // 20) + '"]', "p" * (n - 9) + " https:/", "{" + '"a":1,' * (n // 6 - 1) + '"b":2}',
+                 "https://h/" + "pa" * (n // 2 - 6), "https://h/?" + "x" * (n - 12), "https://h/#" + "q=1;" * (n // 4 - 3)]
+        for text in texts:
+            self.assertLessEqual(len(text), n)
+            best = min(_timed(lambda: MASKS.strip_url_secrets(text)) for _ in range(3))
+            self.assertLess(best, 0.1, text[:40])
+
+
+def _timed(work):
+    started = time.monotonic()
+    work()
+    return time.monotonic() - started
 
 
 if __name__ == "__main__":
