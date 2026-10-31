@@ -511,6 +511,9 @@ def save_object(group, version, resource, namespace, name, text):
         raise ValueError("the name and namespace cannot change here; create a new object instead")
     if kind["kind"] == "Secret" and any(v == "(hidden)" for v in (obj.get("data") or {}).values()):
         raise ValueError("reveal the secret's values before editing it, or they would be saved as '(hidden)'")
+    if MASKS.has_stripped({key: value for key, value in obj.items() if key not in ("apiVersion", "kind")}):
+        # An address shown without its credentials keeps the stored ones.
+        MASKS.restore(obj, kget(_path(kind, namespace, name)))
     _refuse_masked(obj, kind["group"])
     if OUTAGE.HIDDEN in str((meta.get("annotations") or {}).get(OUTAGE.NAMES.key(OUTAGE.KEY)) or ""):
         current = (kget(_path(kind, namespace, name)).get("metadata") or {}).get("annotations") or {}
