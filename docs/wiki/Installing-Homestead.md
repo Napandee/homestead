@@ -237,14 +237,19 @@ release name and namespace (shown by `helm list -A`). Replace `<version>` with
 the release you want; the newest is at the top of the
 [releases page](https://github.com/homestead-lab/homestead/releases). Drop the
 release tag's leading `v`: release `v2.8.332`, for example, is
-`--version 2.8.332 --set-string image.tag=2.8.332`, as image tags carry no `v`.
+`--version 2.8.332`, as chart versions carry no `v`.
 
 ```bash
-helm upgrade homestead oci://ghcr.io/homestead-lab/charts/homestead -n homestead --version <version> --reuse-values --set-string image.tag=<version> --wait --timeout 5m
+helm upgrade homestead oci://ghcr.io/homestead-lab/charts/homestead -n homestead --version <version> --reset-then-reuse-values --set-string image.tag= --wait --timeout 5m
 ```
 
-This preserves saved values while explicitly updating the image even if an older
-tag was pinned. If a HelmChart controller or GitOps manages the release, update
+Needs Helm 3.14 or later. This keeps the values set at install or in earlier
+upgrades, takes every other value from the new chart, and clears a pinned image
+tag, so the image is the chart's own version now and after later upgrades. Do not use `--reuse-values`: it renders the new chart
+with the old chart's defaults, so a value the chart gained since is missing (the
+upgrade can fail) and the old image repository comes back. Check first with
+`helm get values homestead -n homestead`: an image repository or other value set
+there is kept. If a HelmChart controller or GitOps manages the release, update
 its desired version/values there instead of competing with the controller.
 
 After updating, check the installed version, **Permissions**, and Homestead's

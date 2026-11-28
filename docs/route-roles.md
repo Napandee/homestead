@@ -568,6 +568,7 @@ Also public, and not listed one by one: every path `needs_no_session` in `server
 | POST | `/api/self/nfs` | admin |  | homestead_storage_server |
 | GET | `/api/self/permissions` | admin |  | homestead_route_policy |
 | POST | `/api/self/permissions` | admin |  | homestead_self |
+| GET | `/api/self/probes` | admin |  | homestead_self_probes |
 | GET | `/api/self/replicas` | viewer |  | homestead_self_health |
 | POST | `/api/self/replicas` | admin |  | homestead_self_health |
 | GET | `/api/self/samba` | admin |  | homestead_route_policy |

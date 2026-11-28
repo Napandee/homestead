@@ -12,6 +12,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_http as HTTP
 import homestead_self_data_server as SELF_DATA_ROUTES
+import homestead_self_probes as SELF_PROBES
 import server
 import source_scan as SS
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -274,5 +275,23 @@ class DeclaredInTheirModules(unittest.TestCase):
             self.assertNotIn(gone, source)
 
 
+class OwnProbesRoute(Served):
+    """GET /api/self/probes (#1561) shows a command to run: admins only."""
+
+    def test_only_an_admin_may_ask(self):
+        report = self.enterContext(mock.patch.object(SELF_PROBES, "report", return_value={"state": "current"}))
+        for role in ("viewer", "operator"):
+            self.role = role
+            with self.subTest(role=role):
+                status, _, body = self.request("GET", "/api/self/probes")
+                self.assertEqual(403, status)
+                self.assertEqual("admin", json.loads(body)["needed"])
+        report.assert_not_called()
+        self.role = "admin"
+        status, _, body = self.request("GET", "/api/self/probes")
+        self.assertEqual((200, {"state": "current"}), (status, json.loads(body)))
+
+
 if __name__ == "__main__":
     unittest.main()
+

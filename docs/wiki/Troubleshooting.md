@@ -221,6 +221,10 @@ kubectl -n <namespace> port-forward deploy/homestead 8080  # then ask /healthz a
 
 This probe comes with the manifest, not the image: an install keeps asking
 `/healthz` until its manifest is applied again. A data move accepts either.
+**Settings → Homestead → About this installation → Health checks** says when
+Homestead's checks differ from its release's, and gives the one fix that suits
+how it was installed: a `kubectl patch`, a `helm upgrade`, or the values to set
+where Flux or Argo CD reads them. Homestead restarts once the fix is applied.
 
 **`/metrics`** is off until an admin turns it on in Settings → Homestead
 (*Metrics for Prometheus*). It always needs an

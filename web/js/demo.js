@@ -2021,6 +2021,7 @@ ssh_pwauth: true
     "/api/network/vips/label": { ok: true },
     "/api/self/samba": { ok: true, detail: "Samba is stopping. The shares, their volumes and passwords are kept." },
     "/api/self/nfs": { ok: true, detail: "NFS stopped. Exports, shares and every volume were kept." },
+    "/api/self/probes": { state: "current", detail: "They match this release's manifest.", differences: [] },
     "/api/addons/nfs/remove": { ok: true, detail: "NFS server removed. Export settings and PVCs were kept." },
     "/api/shares/nfs": { ok: true, detail: "NFS export saved" },
     "/api/volumes/other": [{ namespace: "lab", name: "scratch-cache", volume: "pvc-demo-local", storage_class: "local-path",

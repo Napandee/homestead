@@ -334,6 +334,7 @@ async function viewSettings() {
             <b>${esc(probeWord(info.node_probe?.state))}</b><small>${esc(info.node_probe?.detail || "")}</small>
             ${info.node_probe?.account_command && can("admin") ? `<div class="dim xs" style="margin-top:6px">One feature needs a one-time command: freeing Homestead's data volume when it is stuck after a restart. Run once, wherever you use kubectl:</div>${commandBlock(info.node_probe.account_command)}` : ""}</div>
           ${permissionsCell(info.permissions)}
+          ${can("admin") ? ownProbesCell() : ""}
         </div>
         <div class="row" style="margin-top:12px"><button class="btn sm" onclick="welcomeCheck(true)">Open setup guide</button></div>
       `, {tab:`about`, save:`app`})}
@@ -366,7 +367,7 @@ async function viewSettings() {
 // section on screen reads its data: opening Settings read every section's,
 // some twice, and each section switch read them all again.
 const SETTINGS_LOADERS = {
-  homestead: [() => replicasPaint(), () => homesteadDataPaint(), () => selfHealthPaint()],
+  homestead: [() => replicasPaint(), () => homesteadDataPaint(), () => selfHealthPaint(), () => ownProbesPaint()],
   updates: [
     () => { if (window.homesteadUpdateCardPaint) { homesteadUpdateCardPaint(); if (!STATE.data.imageUpdates) loadImageUpdates(false, true); } },
     () => clusterComponentsPaint(), () => window.osUpdatesCardPaint?.(), () => window.validatedVersionsPaint?.(),
@@ -892,6 +893,34 @@ window.permissionsRecheck = async () => {
   } catch (e) { toast(e.message, "bad"); }
 };
 
+/* ------------------------------------------------ Homestead's own health checks
+   The in-app update changes only the image, so an install keeps the probes it
+   was installed with (#1561). The server compares them with this release's
+   manifest and chooses the fix for how Homestead was installed; this shows it
+   to copy. Nothing here changes the Deployment. */
+const OWN_PROBE_WORDS = { current: "match this release", differs: "differ from this release",
+  unknown: "could not be checked" };
+
+function ownProbesCell(state) {
+  const label = `<span>Health checks ${tip("Kubernetes uses these checks, its probes, to tell whether Homestead is running and can take requests. They come with the install manifest, not with the image, so an update made in Homestead keeps the old ones.")}</span>`;
+  if (!state) return `<div id="ownProbesCell">${label}<b>checking</b></div>`;
+  const fix = state.state === "differs" ? state.fix || {} : {};
+  const line = text => text ? `<div class="dim xs" style="margin-top:6px">${esc(text)}</div>` : "";
+  return `<div id="ownProbesCell">${label}
+    <b>${esc(OWN_PROBE_WORDS[state.state] || state.state)}</b><small>${esc(state.detail || "")}</small>
+    ${state.state === "differs" ? line(state.effect) : ""}${line(fix.note)}
+    ${fix.command ? commandBlock(fix.command) : ""}${fix.values ? commandBlock(fix.values) : ""}</div>`;
+}
+
+async function ownProbesPaint() {
+  if (!can("admin") || !$("#ownProbesCell")) return;
+  let state;
+  try { state = await api("/api/self/probes"); }
+  catch (e) { state = { state: "unknown", detail: `Homestead's health checks could not be read (${e.message}).` }; }
+  const cell = $("#ownProbesCell");
+  if (cell) cell.outerHTML = ownProbesCell(state);
+}
+window.ownProbesPaint = ownProbesPaint;
 
 const probeWord = state => ({ updated: "updated with this release", current: "up to date",
   absent: "not installed", error: "could not be checked" })[state] || "unknown";
