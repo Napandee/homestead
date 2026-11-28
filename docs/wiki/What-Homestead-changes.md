@@ -109,7 +109,7 @@ Each is done once. One you remove later is not put back.
 | Hardware labels on hosts (GPUs, devices, an NFS-ready mark) | `Node` labels and an annotation | always |
 | Keeps one default storage class (clears the default flag on extra ones), and puts back a restore class volumes still use | `StorageClass` | always |
 | Keeps kube-vip's settings in step with the hosts (its interface, leader election, network capabilities), and removes a Homestead-made LoadBalancer `Service` whose app has been gone over 10 minutes | `HelmChart` `kube-vip`, `Service` | always; k3s and RKE2 only |
-| Puts back an app address kube-vip lost, and restarts kube-vip (deletes its pods) when it stops electing a leader | `Service` status, kube-vip `Pod` | always, where kube-vip is the load balancer |
+| Puts back an app address missing from a kube-vip Service's status (ServiceLB empties it on k3s and RKE2), and restarts kube-vip (deletes its pods) when it stops electing a leader | `Service` status, kube-vip `Pod` | always, where kube-vip is the load balancer |
 | Host changes, once per host, through a short helper pod: keeps multipathd off Longhorn's disks (`/etc/multipath.conf`), starts `iscsid`, caps the systemd journal at 1 GB, raises inotify limits, and puts a `.skip` beside manifests older installers left in k3s's or RKE2's auto-deploy folder so they are not applied again at boot | helper `Pod`, `Lease`; files on the host | always; k3s and RKE2 only |
 | Host facts (OS, updates) read every 6 hours through a helper pod | `Pod` | always; k3s and RKE2 only |
 | Host console on each host: installs, updates or removes a console service on the host | helper `Pod`, `Lease`; files on the host | **Settings → Cluster → Add-ons → Host console**; k3s and RKE2 only |

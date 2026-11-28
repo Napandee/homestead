@@ -653,8 +653,8 @@
     ingresses: [],
   };
   /* Nodes & addresses: node1 answers for the management address and the app
-     virtual IPs; the file shares' address is answered for and left off its Service,
-     the fault Homestead records for kube-vip. */
+     virtual IPs; the file shares' address is answered for but missing from its
+     Service's status, the state Homestead writes back (ServiceLB empties it on k3s and RKE2). */
   const listener = (port, service, workloads, ready = 1) => ({ port, protocol: "TCP", namespace: service === "ingress-expose" ? "kube-system" : "lab", service, workloads, ready });
   const place = (ip, node, listeners, state = "ok", reason = "") => ({ ip, kind: "vip", node, controller: "kube-vip", listeners,
     services: [], unrouted: state === "unrouted" ? [{ namespace: "lab", name: "homestead-smb" }] : [], ready: 1, announced: !!node, state, reason });
